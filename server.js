@@ -323,7 +323,7 @@ function broadcastGameState() {
         type: 'gameState',
         ball: game.ball,
         bricks: game.bricks,
-        players: game.players.map(p => ({ id: p.id, x: p.x, color: p.color, score: p.score })),
+        players: game.players.map(p => ({ id: p.id, x: p.x, y: p.y, color: p.color, score: p.score })),
         lives: game.lives,
         status: game.status
     };
