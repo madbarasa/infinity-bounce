@@ -1,7 +1,7 @@
 const WebSocket = require('ws');
 const http = require('http');
 
-const PORT = 8082;
+const PORT = process.env.PORT || 8082;
 
 // 创建 HTTP 服务器（用于托管静态文件）
 const server = http.createServer((req, res) => {
