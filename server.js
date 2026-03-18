@@ -58,6 +58,7 @@ const CONFIG = {
     CANVAS_HEIGHT: 600,
     PADDLE_WIDTH: 80,
     PADDLE_HEIGHT: 12,
+    PADDLE_SPEED: 8,
     BALL_RADIUS: 8,
     BALL_SPEED: 7,
     BRICK_ROWS: 5,
@@ -65,6 +66,7 @@ const CONFIG = {
     BRICK_WIDTH: 70,
     BRICK_HEIGHT: 20,
     BRICK_PADDING: 5,
+    BRICK_OFFSET_LEFT: 35,
     BRICK_OFFSET_TOP: 60,
     INITIAL_LIVES: 3,
     POINTS_PER_BRICK: 10,
@@ -135,7 +137,8 @@ wss.on('connection', (ws) => {
                     y: CONFIG.CANVAS_HEIGHT - CONFIG.PADDLE_HEIGHT - 10,
                     left: false,
                     right: false,
-                    score: 0
+                    score: 0,
+                    ws: ws
                 };
                 game.players.push(player);
                 
@@ -186,10 +189,6 @@ wss.on('connection', (ws) => {
             broadcastGameState();
         }
     });
-    
-    // 保存 ws 引用
-    const player = game.players.find(p => p.ws === ws);
-    if (player) player.ws = ws;
 });
 
 // 获取挡板位置（根据玩家数量）
