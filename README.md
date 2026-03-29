@@ -1,6 +1,6 @@
 # Infinity Bounce / 多人打砖块
 
-**仓库：** [github.com/madbarasa/infinity-bounce](https://github.com/madbarasa/infinity-bounce)
+**在线试玩：** [https://infinity-bounce.onrender.com)
 
 基于 **Node.js** 与 **WebSocket** 的浏览器多人协作打砖块游戏：多名玩家各自控制挡板，共用一颗球与一面砖墙，游戏逻辑在服务端权威模拟，客户端负责渲染与输入同步。
 
