@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>多人打砖块</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="game-container">
+        <div class="header">
+            <h1>多人打砖块</h1>
+            <div class="stats">
+                <span class="stat">分数: <span id="score">0</span></span>
+                <span class="stat">生命: <span id="lives">3</span></span>
+                <span class="stat">最高分: <span id="high-score">0</span></span>
+            </div>
+        </div>
+
+        <div class="canvas-wrapper">
+            <canvas id="gameCanvas" width="800" height="600"></canvas>
+            
+            <div id="game-menu" class="menu-overlay">
+                <div class="menu-content">
+                    <h2 id="menu-title">多人打砖块</h2>
+                    <p id="menu-message">正在连接服务器...</p>
+                    <button id="start-btn" class="btn-primary">开始游戏</button>
+                    <div class="controls-info">
+                        <p>🎮 操作说明</p>
+                        <p>← → 或 A D 键移动你的挡板</p>
+                        <p>鼠标移动也可控制</p>
+                        <p>空格键暂停</p>
+                        <p>邀请朋友打开同一页面加入</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <div id="players" class="players-list"></div>
+            <button id="pause-btn" class="btn-secondary">暂停</button>
+            <button id="restart-btn" class="btn-secondary">重新开始</button>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+</html>
