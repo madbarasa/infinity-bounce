@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: infinity-bounce
+    env: nodejs
+    buildCommand: npm install
+    startCommand: npm start
+    plan: free
