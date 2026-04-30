@@ -44,6 +44,9 @@ const server = http.createServer((req, res) => {
             res.writeHead(200, { 'Content-Type': 'application/javascript' });
             res.end(data);
         });
+    } else if (req.url === '/config.js') {
+        res.writeHead(200, { 'Content-Type': 'application/javascript' });
+        res.end('const CONFIG = ' + JSON.stringify(CONFIG) + ';');
     } else {
         res.writeHead(404);
         res.end('Not found');
@@ -140,6 +143,7 @@ wss.on('connection', (ws) => {
                     id: data.playerId,
                     color: data.color,
                     x: 0,
+                    targetX: null,
                     y: CONFIG.CANVAS_HEIGHT - CONFIG.PADDLE_HEIGHT - 10,
                     left: false,
                     right: false,
@@ -160,8 +164,8 @@ wss.on('connection', (ws) => {
                     player.left = data.left;
                     player.right = data.right;
                     if (data.mouseX !== null && data.mouseX !== undefined) {
-                        player.x = data.mouseX - CONFIG.PADDLE_WIDTH / 2;
-                        player.x = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - CONFIG.PADDLE_WIDTH, player.x));
+                        player.targetX = data.mouseX - CONFIG.PADDLE_WIDTH / 2;
+                        player.targetX = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - CONFIG.PADDLE_WIDTH, player.targetX));
                     }
                 }
             }
@@ -205,6 +209,7 @@ function repositionAllPaddles() {
     const positions = getPaddlePositions(game.players.length);
     game.players.forEach((p, i) => {
         p.x = positions[i];
+        p.targetX = positions[i];
     });
 }
 
@@ -227,11 +232,12 @@ function resetBall() {
     if (game.players.length === 0) return;
     const randomPlayer = game.players[Math.floor(Math.random() * game.players.length)];
     game.lastPaddleHitPlayerId = randomPlayer.id;
+    const angle = (Math.random() - 0.5) * Math.PI / 2; // -45 to 45 degrees
     game.ball = {
         x: randomPlayer.x + CONFIG.PADDLE_WIDTH / 2,
         y: randomPlayer.y - CONFIG.BALL_RADIUS,
-        dx: CONFIG.BALL_SPEED * (Math.random() > 0.5 ? 1 : -1),
-        dy: -CONFIG.BALL_SPEED
+        dx: Math.sin(angle) * CONFIG.BALL_SPEED,
+        dy: -Math.cos(angle) * CONFIG.BALL_SPEED
     };
 }
 
@@ -255,8 +261,18 @@ function gameLoop() {
 
     // 更新玩家挡板位置
     game.players.forEach(player => {
-        if (player.left) player.x -= CONFIG.PADDLE_SPEED;
-        if (player.right) player.x += CONFIG.PADDLE_SPEED;
+        if (player.left || player.right) {
+            player.targetX = null;
+            if (player.left) player.x -= CONFIG.PADDLE_SPEED;
+            if (player.right) player.x += CONFIG.PADDLE_SPEED;
+        } else if (player.targetX !== undefined && player.targetX !== null) {
+            const diff = player.targetX - player.x;
+            if (Math.abs(diff) > CONFIG.PADDLE_SPEED) {
+                player.x += Math.sign(diff) * CONFIG.PADDLE_SPEED;
+            } else {
+                player.x = player.targetX;
+            }
+        }
         player.x = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - CONFIG.PADDLE_WIDTH, player.x));
     });
     
@@ -265,11 +281,16 @@ function gameLoop() {
     game.ball.y += game.ball.dy;
     
     // 墙壁碰撞
-    if (game.ball.x - CONFIG.BALL_RADIUS < 0 || game.ball.x + CONFIG.BALL_RADIUS > CONFIG.CANVAS_WIDTH) {
-        game.ball.dx *= -1;
+    if (game.ball.x - CONFIG.BALL_RADIUS < 0) {
+        game.ball.x = CONFIG.BALL_RADIUS;
+        game.ball.dx = Math.abs(game.ball.dx);
+    } else if (game.ball.x + CONFIG.BALL_RADIUS > CONFIG.CANVAS_WIDTH) {
+        game.ball.x = CONFIG.CANVAS_WIDTH - CONFIG.BALL_RADIUS;
+        game.ball.dx = -Math.abs(game.ball.dx);
     }
     if (game.ball.y - CONFIG.BALL_RADIUS < 0) {
-        game.ball.dy *= -1;
+        game.ball.y = CONFIG.BALL_RADIUS;
+        game.ball.dy = Math.abs(game.ball.dy);
     }
     
     // 挡板碰撞
@@ -287,13 +308,18 @@ function gameLoop() {
             bottom: game.ball.y + CONFIG.BALL_RADIUS
         };
         if (rectIntersect(ballRect, paddleRect)) {
-            game.lastPaddleHitPlayerId = player.id;
-            const hitPos = (game.ball.x - player.x) / CONFIG.PADDLE_WIDTH;
-            const angle = hitPos * Math.PI - Math.PI / 2;
-            const speed = Math.sqrt(game.ball.dx * game.ball.dx + game.ball.dy * game.ball.dy);
-            game.ball.dx = Math.sin(angle) * speed;
-            game.ball.dy = -Math.abs(Math.cos(angle) * speed);
-            game.ball.y = player.y - CONFIG.BALL_RADIUS;
+            if (game.ball.dy > 0) {
+                game.lastPaddleHitPlayerId = player.id;
+                const hitPos = (game.ball.x - player.x) / CONFIG.PADDLE_WIDTH;
+                const angle = hitPos * Math.PI - Math.PI / 2;
+                const maxAngle = Math.PI / 3; // 限制最大反射角为 60度
+                const clampedAngle = Math.max(-maxAngle, Math.min(maxAngle, angle));
+                
+                const speed = Math.sqrt(game.ball.dx * game.ball.dx + game.ball.dy * game.ball.dy);
+                game.ball.dx = Math.sin(clampedAngle) * speed;
+                game.ball.dy = -Math.cos(clampedAngle) * speed;
+                game.ball.y = player.y - CONFIG.BALL_RADIUS;
+            }
         }
     }
     
@@ -307,15 +333,26 @@ function gameLoop() {
             const scorer = game.players.find(p => p.id === game.lastPaddleHitPlayerId);
             if (scorer) scorer.score += CONFIG.POINTS_PER_BRICK;
             
-            // 反弹
-            const ballCenterX = game.ball.x;
-            const ballCenterY = game.ball.y;
-            const brickCenterX = brick.x + brick.width / 2;
-            const brickCenterY = brick.y + brick.height / 2;
-            const dx = ballCenterX - brickCenterX;
-            const dy = ballCenterY - brickCenterY;
-            if (Math.abs(dx) > Math.abs(dy)) game.ball.dx *= -1;
-            else game.ball.dy *= -1;
+            const overlapLeft = game.ball.x + CONFIG.BALL_RADIUS - brickRect.left;
+            const overlapRight = brickRect.right - (game.ball.x - CONFIG.BALL_RADIUS);
+            const overlapTop = game.ball.y + CONFIG.BALL_RADIUS - brickRect.top;
+            const overlapBottom = brickRect.bottom - (game.ball.y - CONFIG.BALL_RADIUS);
+
+            const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
+
+            if (minOverlap === overlapLeft) {
+                game.ball.x = brickRect.left - CONFIG.BALL_RADIUS;
+                game.ball.dx = -Math.abs(game.ball.dx);
+            } else if (minOverlap === overlapRight) {
+                game.ball.x = brickRect.right + CONFIG.BALL_RADIUS;
+                game.ball.dx = Math.abs(game.ball.dx);
+            } else if (minOverlap === overlapTop) {
+                game.ball.y = brickRect.top - CONFIG.BALL_RADIUS;
+                game.ball.dy = -Math.abs(game.ball.dy);
+            } else if (minOverlap === overlapBottom) {
+                game.ball.y = brickRect.bottom + CONFIG.BALL_RADIUS;
+                game.ball.dy = Math.abs(game.ball.dy);
+            }
             break;
         }
     }

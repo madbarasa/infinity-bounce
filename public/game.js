@@ -1,24 +1,7 @@
 // 多人协作打砖块 - 游戏客户端
 // 支持 1-4 名玩家
 
-const CONFIG = {
-    CANVAS_WIDTH: 800,
-    CANVAS_HEIGHT: 600,
-    PADDLE_WIDTH: 80,
-    PADDLE_HEIGHT: 12,
-    PADDLE_SPEED: 7,
-    BALL_RADIUS: 8,
-    BALL_SPEED: 7,
-    BRICK_ROWS: 5,
-    BRICK_COLS: 10,
-    BRICK_WIDTH: 70,
-    BRICK_HEIGHT: 20,
-    BRICK_PADDING: 5,
-    BRICK_OFFSET_TOP: 60,
-    INITIAL_LIVES: 3,
-    POINTS_PER_BRICK: 10,
-    MAX_PLAYERS: 4
-};
+
 
 const COLORS = {
     players: ['#4fc3f7', '#ab47bc', '#42a5f5', '#66bb6a'],
@@ -35,6 +18,7 @@ let reconnectAttempt = 0;
 
 let playerId = null;
 let myColor = null;
+let myLocalX = null;
 
 let gameState = {
     ball: null,
@@ -143,18 +127,22 @@ function connect() {
     };
 }
 
-function sendInput() {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(
-        JSON.stringify({
-            type: 'input',
-            playerId: playerId,
-            left: keys.left,
-            right: keys.right,
-            mouseX: mouse.x
-        })
-    );
-}
+let lastSentInput = '';
+setInterval(() => {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !playerId) return;
+    const inputState = {
+        type: 'input',
+        playerId: playerId,
+        left: keys.left,
+        right: keys.right,
+        mouseX: mouse.x
+    };
+    const inputStr = JSON.stringify(inputState);
+    if (inputStr !== lastSentInput) {
+        ws.send(inputStr);
+        lastSentInput = inputStr;
+    }
+}, 33);
 
 function updateUI() {
     const total = gameState.players.reduce((sum, p) => sum + (p.score || 0), 0);
@@ -206,14 +194,20 @@ function draw() {
 
     for (const player of gameState.players) {
         ctx.fillStyle = player.color;
-        fillRoundRect(ctx, player.x, player.y, CONFIG.PADDLE_WIDTH, CONFIG.PADDLE_HEIGHT, 8);
+        
+        let drawX = player.x;
+        if (player.id === playerId && myLocalX !== null) {
+            drawX = myLocalX; // 使用本地预测坐标
+        }
+        
+        fillRoundRect(ctx, drawX, player.y, CONFIG.PADDLE_WIDTH, CONFIG.PADDLE_HEIGHT, 8);
 
         ctx.fillStyle = '#fff';
         ctx.font = '10px Arial';
         ctx.textAlign = 'center';
         ctx.fillText(
             player.id.substr(0, 4),
-            player.x + CONFIG.PADDLE_WIDTH / 2,
+            drawX + CONFIG.PADDLE_WIDTH / 2,
             player.y - 5
         );
     }
@@ -258,20 +252,18 @@ document.addEventListener('keydown', (e) => {
         e.preventDefault();
         sendCommand('pause');
     }
-    sendInput();
 });
 
 document.addEventListener('keyup', (e) => {
     if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = false;
     if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = false;
-    sendInput();
 });
 
 canvas.addEventListener('mousemove', (e) => {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     mouse.x = (e.clientX - rect.left) * scaleX;
-    sendInput();
+    myLocalX = mouse.x - CONFIG.PADDLE_WIDTH / 2;
 });
 
 startBtn.addEventListener('click', () => {
@@ -302,6 +294,17 @@ window.addEventListener('load', () => {
     connect();
 
     function loop() {
+        if (playerId && gameState.status === 'playing') {
+            const myPlayer = gameState.players.find(p => p.id === playerId);
+            if (myPlayer && myLocalX === null) {
+                myLocalX = myPlayer.x;
+            }
+            if (myLocalX !== null) {
+                if (keys.left) myLocalX -= CONFIG.PADDLE_SPEED;
+                if (keys.right) myLocalX += CONFIG.PADDLE_SPEED;
+                myLocalX = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - CONFIG.PADDLE_WIDTH, myLocalX));
+            }
+        }
         draw();
         requestAnimationFrame(loop);
     }
