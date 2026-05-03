@@ -4,9 +4,9 @@
 
 
 const COLORS = {
-    players: ['#4fc3f7', '#ab47bc', '#42a5f5', '#66bb6a'],
+    players: ['#00f5d4', '#9b5de5', '#f15bb5', '#fee440'], // Cyan, Purple, Pink, Yellow
     ball: '#ffffff',
-    bricks: ['#ef5350', '#ab47bc', '#42a5f5', '#26a69a', '#66bb6a']
+    bricks: ['#f15bb5', '#9b5de5', '#00f5d4', '#fee440', '#ffffff']
 };
 
 const HIGHSCORE_KEY = 'multi_breakout_highscore';

@@ -1,0 +1,24 @@
+{
+  "PreToolUse": [
+    {
+      "matcher": "Write|Edit|multi_replace_file_content|replace_file_content",
+      "hooks": [
+        {
+          "type": "prompt",
+          "prompt": "你正在修改代码。请严格遵守以下《弑君者》项目规范：\n1. **严禁硬编码**：检查你要写入的代码片段中是否包含“魔法数字”或硬编码的字符串、颜色值、音效路径。所有这些必须提取到 `CONFIG` 对象中。\n2. **模块化分区**：如果你在修改 `game.js`，请确保逻辑归类到正确的 7 个分区中（CONFIG, GLOBAL STATE, UTILITIES, ASSETS, EVENT HANDLERS, CORE LOGIC, INITIALIZATION）。\n3. **CSS 规范**：使用 `clamp()` 函数和 CSS 变量。\n\n如果发现违规，请在返回中设置 `permissionDecision: \"deny\"` 并说明原因。否则设置 `\"allow\"`。\n\n当前修改内容：$TOOL_INPUT"
+        }
+      ]
+    }
+  ],
+  "Stop": [
+    {
+      "matcher": "*",
+      "hooks": [
+        {
+          "type": "prompt",
+          "prompt": "任务即将结束。请检查：\n1. **版本号升级**：如果本次任务修复了 Bug，请升级 package.json 中的 z 位（x.y.z）；如果上线了新功能，请升级 y 位。\n2. **清理工作**：是否已经完成了代码校验并准备清理本地环境？\n\n如果你还没有升级版本号但修改了代码，请返回 `decision: \"block\"` 并提醒你自己去升级。否则返回 `\"approve\"`。"
+        }
+      ]
+    }
+  ]
+}

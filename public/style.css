@@ -1,3 +1,17 @@
+:root {
+    --color-bg: #050505;
+    --color-surface: #12121c;
+    --color-primary: #00f5d4;
+    --color-secondary: #9b5de5;
+    --color-accent: #f15bb5;
+    --color-highlight: #fee440;
+    --color-text-main: #f8f9fa;
+    --color-text-muted: #94a3b8;
+    --neon-shadow: 0 0 20px rgba(0, 245, 212, 0.3);
+    --glass-bg: rgba(255, 255, 255, 0.03);
+    --glass-border: rgba(255, 255, 255, 0.1);
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -5,22 +19,26 @@
 }
 
 body {
-    font-family: 'Segoe UI', system-ui, sans-serif;
-    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-    color: #fff;
+    font-family: 'Outfit', 'Inter', system-ui, sans-serif;
+    background: radial-gradient(circle at top left, #12121c 0%, #050505 100%);
+    color: var(--color-text-main);
     min-height: 100vh;
     display: flex;
     justify-content: center;
     align-items: center;
     padding: 20px;
+    overflow-x: hidden;
 }
 
 .game-container {
-    background: rgba(0, 0, 0, 0.3);
-    border-radius: 16px;
-    padding: 24px;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-    max-width: 900px;
+    background: var(--glass-bg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--glass-border);
+    border-radius: 24px;
+    padding: 32px;
+    box-shadow: 0 40px 100px rgba(0, 0, 0, 0.8);
+    max-width: 960px;
     width: 100%;
 }
 
@@ -34,9 +52,13 @@ body {
 }
 
 .header h1 {
-    font-size: 1.8rem;
-    color: #4fc3f7;
-    text-shadow: 0 0 10px rgba(79, 195, 247, 0.5);
+    font-size: 2.2rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    background: linear-gradient(to right, var(--color-primary), var(--color-secondary));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 0 10px rgba(0, 245, 212, 0.3));
 }
 
 .stats {
@@ -45,15 +67,19 @@ body {
 }
 
 .stat {
-    background: rgba(255, 255, 255, 0.1);
-    padding: 8px 16px;
-    border-radius: 8px;
-    font-size: 1rem;
-    font-weight: 600;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    padding: 10px 20px;
+    border-radius: 12px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--color-text-muted);
 }
 
 .stat span {
-    color: #ffd700;
+    color: var(--color-highlight);
+    font-weight: 700;
+    margin-left: 4px;
 }
 
 .canvas-wrapper {
@@ -64,10 +90,10 @@ body {
 }
 
 #gameCanvas {
-    background: #0a0a0f;
-    border: 2px solid #333;
-    border-radius: 8px;
-    box-shadow: 0 0 30px rgba(79, 195, 247, 0.2);
+    background: var(--color-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    box-shadow: 0 0 40px rgba(0, 245, 212, 0.1);
     display: block;
     max-width: 100%;
     height: auto;
@@ -79,11 +105,12 @@ body {
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(10, 10, 15, 0.95);
+    background: rgba(5, 5, 5, 0.85);
+    backdrop-filter: blur(10px);
     display: flex;
     justify-content: center;
     align-items: center;
-    border-radius: 8px;
+    border-radius: 12px;
     z-index: 10;
 }
 
@@ -97,9 +124,12 @@ body {
 }
 
 .menu-content h2 {
-    font-size: 2.5rem;
-    margin-bottom: 10px;
-    color: #4fc3f7;
+    font-size: 3.5rem;
+    font-weight: 900;
+    margin-bottom: 15px;
+    background: linear-gradient(to bottom, #fff, var(--color-text-muted));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
 }
 
 .menu-content p {
@@ -109,21 +139,23 @@ body {
 }
 
 .btn-primary {
-    background: linear-gradient(135deg, #4fc3f7, #29b6f6);
+    background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
     color: #000;
     border: none;
-    padding: 14px 40px;
-    font-size: 1.2rem;
-    font-weight: 700;
-    border-radius: 30px;
+    padding: 16px 48px;
+    font-size: 1.1rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-radius: 50px;
     cursor: pointer;
-    transition: all 0.3s ease;
-    box-shadow: 0 4px 15px rgba(79, 195, 247, 0.4);
+    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    box-shadow: 0 10px 30px rgba(0, 245, 212, 0.4);
 }
 
 .btn-primary:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(79, 195, 247, 0.6);
+    transform: translateY(-4px) scale(1.02);
+    box-shadow: 0 15px 40px rgba(0, 245, 212, 0.6);
 }
 
 .btn-secondary {
