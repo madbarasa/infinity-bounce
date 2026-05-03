@@ -92,8 +92,7 @@ function handleInputX(clientX) {
     const scaleX = canvas.width / rect.width;
     mouse.x = (clientX - rect.left) * scaleX;
     
-    // 立即同步到服务器，不再等待心跳频率，解决滞后感
-    sendInput();
+    // 移除立即发送，交由 60fps 的定时器统一发送，防止由于高刷鼠标导致的性能爆炸
 }
 
 // ==========================================
@@ -175,14 +174,12 @@ function connect() {
         reconnectAttempt = 0;
         console.log('Connected to server');
         playerId = generatePlayerId();
-        const colorIdx = Math.floor(Math.random() * CONFIG.MAX_PLAYERS);
-        myColor = COLORS.players[colorIdx];
+        // 颜色现在由服务器统一分配
 
         socket.send(
             JSON.stringify({
                 type: 'join',
-                playerId: playerId,
-                color: myColor
+                playerId: playerId
             })
         );
     };
@@ -386,11 +383,9 @@ window.addEventListener('load', () => {
             if (myLocalX !== null) {
                 if (keys.left) {
                     myLocalX -= CONFIG.PADDLE_SPEED;
-                    sendInput();
                 }
                 if (keys.right) {
                     myLocalX += CONFIG.PADDLE_SPEED;
-                    sendInput();
                 }
                 const pWidth = (gameState.players.find(p => p.id === playerId) || {}).paddleWidth || CONFIG.PADDLE_WIDTH;
                 myLocalX = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - pWidth, myLocalX));

@@ -57,6 +57,7 @@ const CONFIG = {
     INITIAL_LIVES: 3,
     POINTS_PER_BRICK: 10,
     MAX_PLAYERS: 4,
+    PLAYER_COLORS: ['#00f5d4', '#9b5de5', '#f15bb5', '#fee440'],
     // --- 道具系统配置 ---
     POWERUP_SIZE: 20,
     POWERUP_SPEED: 2.5,
@@ -109,9 +110,10 @@ wss.on('connection', (ws) => {
                     ws.send(JSON.stringify({ type: 'error', message: '房间已满' }));
                     return;
                 }
+                const playerColor = CONFIG.PLAYER_COLORS[game.players.length % CONFIG.PLAYER_COLORS.length];
                 const player = {
                     id: data.playerId,
-                    color: data.color,
+                    color: playerColor,
                     x: 0,
                     y: CONFIG.CANVAS_HEIGHT - CONFIG.PADDLE_HEIGHT - 10,
                     left: false,
