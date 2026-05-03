@@ -7,7 +7,12 @@
 const COLORS = {
     players: ['#00f5d4', '#9b5de5', '#f15bb5', '#fee440'], // Cyan, Purple, Pink, Yellow
     ball: '#ffffff',
-    bricks: ['#f15bb5', '#9b5de5', '#00f5d4', '#fee440', '#ffffff']
+    bricks: ['#f15bb5', '#9b5de5', '#00f5d4', '#fee440', '#ffffff'],
+    powerups: {
+        W: '#00f5d4', // Wider - Cyan
+        P: '#fee440', // Points - Yellow
+        M: '#ffffff'  // Multi-ball - White
+    }
 };
 
 const HIGHSCORE_KEY = 'multi_breakout_highscore';
@@ -25,9 +30,10 @@ let myColor = null;
 let myLocalX = null;
 
 let gameState = {
-    ball: null,
+    balls: [],
     bricks: [],
     players: [],
+    powerups: [],
     lives: (typeof CONFIG !== 'undefined' ? CONFIG.INITIAL_LIVES : 3),
     status: 'waiting'
 };
@@ -85,7 +91,9 @@ function handleInputX(clientX) {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     mouse.x = (clientX - rect.left) * scaleX;
-    myLocalX = mouse.x - CONFIG.PADDLE_WIDTH / 2;
+    
+    // 立即同步到服务器，不再等待心跳频率，解决滞后感
+    sendInput();
 }
 
 // ==========================================
@@ -208,7 +216,7 @@ function connect() {
 }
 
 let lastSentInput = '';
-setInterval(() => {
+function sendInput() {
     if (!ws || ws.readyState !== WebSocket.OPEN || !playerId) return;
     const inputState = {
         type: 'input',
@@ -222,7 +230,8 @@ setInterval(() => {
         ws.send(inputStr);
         lastSentInput = inputStr;
     }
-}, 33);
+}
+setInterval(sendInput, 16); // 提高心跳频率至 60fps
 
 function updateUI() {
     const total = gameState.players.reduce((sum, p) => sum + (p.score || 0), 0);
@@ -232,8 +241,10 @@ function updateUI() {
     playersEl.innerHTML = gameState.players
         .map(
             (p) => `
-        <div class="player-tag" style="background:${p.color}">
-            ${p.id.substr(0, 8)} ${p.id === playerId ? '(你)' : ''}
+        <div class="player-tag" style="background:${p.color}; border: ${p.id === playerId ? '2px solid #fff' : 'none'}">
+            <span class="p-id">${p.id.substr(0, 4)}</span>
+            <span class="p-score">${p.score || 0}</span>
+            ${p.id === playerId ? '<span class="you-tag">YOU</span>' : ''}
         </div>
     `
         )
@@ -274,29 +285,64 @@ function draw() {
 
     for (const player of gameState.players) {
         ctx.fillStyle = player.color;
+        const pWidth = player.paddleWidth || CONFIG.PADDLE_WIDTH;
         
         let drawX = player.x;
-        if (player.id === playerId && myLocalX !== null) {
-            drawX = myLocalX; // 使用本地预测坐标
+        // 只有键盘操作时使用本地预测，鼠标操作由于同步极快，直接使用服务端坐标更准
+        if (player.id === playerId && (keys.left || keys.right) && myLocalX !== null) {
+            drawX = myLocalX;
         }
         
-        fillRoundRect(ctx, drawX, player.y, CONFIG.PADDLE_WIDTH, CONFIG.PADDLE_HEIGHT, 8);
+        fillRoundRect(ctx, drawX, player.y, pWidth, CONFIG.PADDLE_HEIGHT, 8);
+
+        // 挡板发光效果
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = player.color;
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(drawX, player.y, pWidth, CONFIG.PADDLE_HEIGHT);
+        ctx.shadowBlur = 0;
 
         ctx.fillStyle = '#fff';
-        ctx.font = '10px Arial';
+        ctx.font = 'bold 12px Arial';
         ctx.textAlign = 'center';
         ctx.fillText(
-            player.id.substr(0, 4),
-            drawX + CONFIG.PADDLE_WIDTH / 2,
-            player.y - 5
+            player.id === playerId ? "YOU" : player.id.substr(0, 4),
+            drawX + pWidth / 2,
+            player.y - 8
         );
     }
 
-    if (gameState.ball) {
-        ctx.beginPath();
-        ctx.arc(gameState.ball.x, gameState.ball.y, CONFIG.BALL_RADIUS, 0, Math.PI * 2);
-        ctx.fillStyle = COLORS.ball;
-        ctx.fill();
+    // 渲染球 (数组)
+    if (gameState.balls) {
+        gameState.balls.forEach(ball => {
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, CONFIG.BALL_RADIUS, 0, Math.PI * 2);
+            ctx.fillStyle = COLORS.ball;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = '#fff';
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        });
+    }
+
+    // 渲染道具
+    if (gameState.powerups) {
+        gameState.powerups.forEach(pu => {
+            ctx.fillStyle = COLORS.powerups[pu.type] || '#fff';
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = ctx.fillStyle;
+            
+            // 绘制一个带字母的圆角矩形道具
+            fillRoundRect(ctx, pu.x, pu.y, pu.width, pu.height, 4);
+            
+            ctx.fillStyle = '#000';
+            ctx.font = 'bold 14px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(pu.type, pu.x + pu.width / 2, pu.y + pu.height / 2);
+            ctx.shadowBlur = 0;
+        });
     }
 
     if (gameState.status === 'paused') {
@@ -338,9 +384,16 @@ window.addEventListener('load', () => {
                 myLocalX = myPlayer.x;
             }
             if (myLocalX !== null) {
-                if (keys.left) myLocalX -= CONFIG.PADDLE_SPEED;
-                if (keys.right) myLocalX += CONFIG.PADDLE_SPEED;
-                myLocalX = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - CONFIG.PADDLE_WIDTH, myLocalX));
+                if (keys.left) {
+                    myLocalX -= CONFIG.PADDLE_SPEED;
+                    sendInput();
+                }
+                if (keys.right) {
+                    myLocalX += CONFIG.PADDLE_SPEED;
+                    sendInput();
+                }
+                const pWidth = (gameState.players.find(p => p.id === playerId) || {}).paddleWidth || CONFIG.PADDLE_WIDTH;
+                myLocalX = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - pWidth, myLocalX));
             }
         }
         draw();

@@ -5,42 +5,26 @@ const PORT = process.env.PORT || 8082;
 
 // 创建 HTTP 服务器（用于托管静态文件）
 const server = http.createServer((req, res) => {
+    const fs = require('fs');
+    const path = require('path');
     if (req.url === '/' || req.url === '/index.html') {
-        const fs = require('fs');
-        const path = require('path');
         const filePath = path.join(__dirname, 'public', 'index.html');
         fs.readFile(filePath, (err, data) => {
-            if (err) {
-                res.writeHead(500);
-                res.end('Error loading index.html');
-                return;
-            }
+            if (err) { res.writeHead(500); res.end('Error'); return; }
             res.writeHead(200, { 'Content-Type': 'text/html' });
             res.end(data);
         });
     } else if (req.url === '/style.css') {
-        const fs = require('fs');
-        const path = require('path');
         const filePath = path.join(__dirname, 'public', 'style.css');
         fs.readFile(filePath, (err, data) => {
-            if (err) {
-                res.writeHead(500);
-                res.end('Error loading style.css');
-                return;
-            }
+            if (err) { res.writeHead(500); res.end('Error'); return; }
             res.writeHead(200, { 'Content-Type': 'text/css' });
             res.end(data);
         });
     } else if (req.url === '/game.js') {
-        const fs = require('fs');
-        const path = require('path');
         const filePath = path.join(__dirname, 'public', 'game.js');
         fs.readFile(filePath, (err, data) => {
-            if (err) {
-                res.writeHead(500);
-                res.end('Error loading game.js');
-                return;
-            }
+            if (err) { res.writeHead(500); res.end('Error'); return; }
             res.writeHead(200, { 'Content-Type': 'application/javascript' });
             res.end(data);
         });
@@ -72,39 +56,36 @@ const CONFIG = {
     BRICK_OFFSET_TOP: 60,
     INITIAL_LIVES: 3,
     POINTS_PER_BRICK: 10,
-    MAX_PLAYERS: 4
+    MAX_PLAYERS: 4,
+    // --- 道具系统配置 ---
+    POWERUP_SIZE: 20,
+    POWERUP_SPEED: 2.5,
+    POWERUP_PROBABILITY: 0.2,
+    POWERUP_DURATION: 10000, // 10秒
+    BONUS_POINTS: 50,
+    LIFE_REWARD_THRESHOLD: 100
 };
 
-CONFIG.BRICK_OFFSET_LEFT =
-    (CONFIG.CANVAS_WIDTH -
-        (CONFIG.BRICK_COLS * CONFIG.BRICK_WIDTH +
-            (CONFIG.BRICK_COLS - 1) * CONFIG.BRICK_PADDING)) /
-    2;
+CONFIG.BRICK_OFFSET_LEFT = (CONFIG.CANVAS_WIDTH - (CONFIG.BRICK_COLS * CONFIG.BRICK_WIDTH + (CONFIG.BRICK_COLS - 1) * CONFIG.BRICK_PADDING)) / 2;
 
 // 游戏房间状态
 let game = {
-    status: 'waiting', // waiting, playing, paused, gameover, win
-    ball: {
-        x: CONFIG.CANVAS_WIDTH / 2,
-        y: CONFIG.CANVAS_HEIGHT - 100,
-        dx: CONFIG.BALL_SPEED,
-        dy: -CONFIG.BALL_SPEED
-    },
+    status: 'waiting',
+    balls: [],
     bricks: [],
     players: [],
+    powerups: [],
     lives: CONFIG.INITIAL_LIVES,
-    /** 最后一次被球击中的挡板所属玩家，用于砖块得分归属 */
     lastPaddleHitPlayerId: null
 };
 
-// 初始化砖块
 function initBricks() {
     game.bricks = [];
+    const colors = ['#ef5350', '#ab47bc', '#42a5f5', '#26a69a', '#66bb6a'];
     for (let row = 0; row < CONFIG.BRICK_ROWS; row++) {
         for (let col = 0; col < CONFIG.BRICK_COLS; col++) {
             const x = col * (CONFIG.BRICK_WIDTH + CONFIG.BRICK_PADDING) + CONFIG.BRICK_OFFSET_LEFT;
             const y = row * (CONFIG.BRICK_HEIGHT + CONFIG.BRICK_PADDING) + CONFIG.BRICK_OFFSET_TOP;
-            const colors = ['#ef5350', '#ab47bc', '#42a5f5', '#26a69a', '#66bb6a'];
             game.bricks.push({
                 x, y,
                 width: CONFIG.BRICK_WIDTH,
@@ -118,58 +99,43 @@ function initBricks() {
 
 initBricks();
 
-// 玩家连接
 wss.on('connection', (ws) => {
-    console.log('New connection');
-    
-    // 为新玩家分配位置
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
-            
             if (data.type === 'join') {
-                if (game.players.some(p => p.ws === ws)) {
-                    return;
-                }
+                if (game.players.some(p => p.ws === ws)) return;
                 if (game.players.length >= CONFIG.MAX_PLAYERS) {
-                    ws.send(JSON.stringify({
-                        type: 'error',
-                        message: '房间已满'
-                    }));
+                    ws.send(JSON.stringify({ type: 'error', message: '房间已满' }));
                     return;
                 }
-
                 const player = {
                     id: data.playerId,
                     color: data.color,
                     x: 0,
-                    targetX: null,
                     y: CONFIG.CANVAS_HEIGHT - CONFIG.PADDLE_HEIGHT - 10,
                     left: false,
                     right: false,
                     score: 0,
+                    lastLifeScore: 0,
+                    paddleWidth: CONFIG.PADDLE_WIDTH,
+                    widerTimer: null,
                     ws
                 };
                 game.players.push(player);
                 repositionAllPaddles();
-
-                console.log(`Player ${data.playerId} joined. Total: ${game.players.length}`);
-
                 broadcastGameState();
-            }
-            else if (data.type === 'input') {
-                // 更新玩家输入
+            } else if (data.type === 'input') {
                 const player = game.players.find(p => p.id === data.playerId);
                 if (player) {
                     player.left = data.left;
                     player.right = data.right;
                     if (data.mouseX !== null && data.mouseX !== undefined) {
-                        player.targetX = data.mouseX - CONFIG.PADDLE_WIDTH / 2;
-                        player.targetX = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - CONFIG.PADDLE_WIDTH, player.targetX));
+                        player.x = data.mouseX - player.paddleWidth / 2;
+                        player.x = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - player.paddleWidth, player.x));
                     }
                 }
-            }
-            else if (data.type === 'command') {
+            } else if (data.type === 'command') {
                 if (data.command === 'start' && game.status === 'waiting' && game.players.length >= 1) {
                     game.status = 'playing';
                     resetBall();
@@ -181,24 +147,28 @@ wss.on('connection', (ws) => {
                     initBricks();
                     game.players.forEach(p => {
                         p.score = 0;
+                        p.lastLifeScore = 0;
+                        p.paddleWidth = CONFIG.PADDLE_WIDTH;
+                        if (p.widerTimer) clearTimeout(p.widerTimer);
                     });
                     game.status = 'waiting';
                     game.lastPaddleHitPlayerId = null;
+                    game.powerups = [];
+                    game.balls = [];
                     resetBall();
                 }
                 broadcastGameState();
             }
-        } catch (e) {
-            console.error('Error processing message:', e);
-        }
+        } catch (e) { console.error(e); }
     });
-    
+
     ws.on('close', () => {
-        const playerIndex = game.players.findIndex(p => p.ws === ws);
-        if (playerIndex !== -1) {
-            game.players.splice(playerIndex, 1);
+        const idx = game.players.findIndex(p => p.ws === ws);
+        if (idx !== -1) {
+            const p = game.players[idx];
+            if (p.widerTimer) clearTimeout(p.widerTimer);
+            game.players.splice(idx, 1);
             repositionAllPaddles();
-            console.log('Player disconnected');
             broadcastGameState();
         }
     });
@@ -207,13 +177,9 @@ wss.on('connection', (ws) => {
 function repositionAllPaddles() {
     if (game.players.length === 0) return;
     const positions = getPaddlePositions(game.players.length);
-    game.players.forEach((p, i) => {
-        p.x = positions[i];
-        p.targetX = positions[i];
-    });
+    game.players.forEach((p, i) => { p.x = positions[i]; });
 }
 
-// 获取挡板位置（根据玩家数量）
 function getPaddlePositions(count) {
     const positions = [];
     if (count === 1) {
@@ -227,26 +193,25 @@ function getPaddlePositions(count) {
     return positions;
 }
 
-// 重置球
+function playerPaddleWidth(p) { return p.paddleWidth || CONFIG.PADDLE_WIDTH; }
+
 function resetBall() {
     if (game.players.length === 0) return;
-    const randomPlayer = game.players[Math.floor(Math.random() * game.players.length)];
-    game.lastPaddleHitPlayerId = randomPlayer.id;
-    const angle = (Math.random() - 0.5) * Math.PI / 2; // -45 to 45 degrees
-    game.ball = {
-        x: randomPlayer.x + CONFIG.PADDLE_WIDTH / 2,
-        y: randomPlayer.y - CONFIG.BALL_RADIUS,
+    const p = game.players[Math.floor(Math.random() * game.players.length)];
+    game.lastPaddleHitPlayerId = p.id;
+    const angle = (Math.random() - 0.5) * Math.PI / 2;
+    game.balls = [{
+        x: p.x + playerPaddleWidth(p) / 2,
+        y: p.y - CONFIG.BALL_RADIUS,
         dx: Math.sin(angle) * CONFIG.BALL_SPEED,
-        dy: -Math.cos(angle) * CONFIG.BALL_SPEED
-    };
+        dy: -CONFIG.BALL_SPEED
+    }];
 }
 
-// 碰撞检测
 function rectIntersect(r1, r2) {
     return !(r2.left > r1.right || r2.right < r1.left || r2.top > r1.bottom || r2.bottom < r1.top);
 }
 
-// 游戏循环
 function gameLoop() {
     if (game.status !== 'playing') {
         setTimeout(gameLoop, 16);
@@ -259,150 +224,134 @@ function gameLoop() {
         return;
     }
 
-    // 更新玩家挡板位置
-    game.players.forEach(player => {
-        if (player.left || player.right) {
-            player.targetX = null;
-            if (player.left) player.x -= CONFIG.PADDLE_SPEED;
-            if (player.right) player.x += CONFIG.PADDLE_SPEED;
-        } else if (player.targetX !== undefined && player.targetX !== null) {
-            const diff = player.targetX - player.x;
-            if (Math.abs(diff) > CONFIG.PADDLE_SPEED) {
-                player.x += Math.sign(diff) * CONFIG.PADDLE_SPEED;
-            } else {
-                player.x = player.targetX;
-            }
-        }
-        player.x = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - CONFIG.PADDLE_WIDTH, player.x));
+    game.players.forEach(p => {
+        if (p.left) p.x -= CONFIG.PADDLE_SPEED;
+        if (p.right) p.x += CONFIG.PADDLE_SPEED;
+        p.x = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - playerPaddleWidth(p), p.x));
     });
-    
-    // 更新球
-    game.ball.x += game.ball.dx;
-    game.ball.y += game.ball.dy;
-    
-    // 墙壁碰撞
-    if (game.ball.x - CONFIG.BALL_RADIUS < 0) {
-        game.ball.x = CONFIG.BALL_RADIUS;
-        game.ball.dx = Math.abs(game.ball.dx);
-    } else if (game.ball.x + CONFIG.BALL_RADIUS > CONFIG.CANVAS_WIDTH) {
-        game.ball.x = CONFIG.CANVAS_WIDTH - CONFIG.BALL_RADIUS;
-        game.ball.dx = -Math.abs(game.ball.dx);
-    }
-    if (game.ball.y - CONFIG.BALL_RADIUS < 0) {
-        game.ball.y = CONFIG.BALL_RADIUS;
-        game.ball.dy = Math.abs(game.ball.dy);
-    }
-    
-    // 挡板碰撞
-    for (const player of game.players) {
-        const paddleRect = {
-            left: player.x,
-            right: player.x + CONFIG.PADDLE_WIDTH,
-            top: player.y,
-            bottom: player.y + CONFIG.PADDLE_HEIGHT
-        };
-        const ballRect = {
-            left: game.ball.x - CONFIG.BALL_RADIUS,
-            right: game.ball.x + CONFIG.BALL_RADIUS,
-            top: game.ball.y - CONFIG.BALL_RADIUS,
-            bottom: game.ball.y + CONFIG.BALL_RADIUS
-        };
-        if (rectIntersect(ballRect, paddleRect)) {
-            if (game.ball.dy > 0) {
-                game.lastPaddleHitPlayerId = player.id;
-                const hitPos = (game.ball.x - player.x) / CONFIG.PADDLE_WIDTH;
-                const angle = hitPos * Math.PI - Math.PI / 2;
-                const maxAngle = Math.PI / 3; // 限制最大反射角为 60度
-                const clampedAngle = Math.max(-maxAngle, Math.min(maxAngle, angle));
-                
-                const speed = Math.sqrt(game.ball.dx * game.ball.dx + game.ball.dy * game.ball.dy);
-                game.ball.dx = Math.sin(clampedAngle) * speed;
-                game.ball.dy = -Math.cos(clampedAngle) * speed;
-                game.ball.y = player.y - CONFIG.BALL_RADIUS;
+
+    for (let i = game.balls.length - 1; i >= 0; i--) {
+        const ball = game.balls[i];
+        ball.x += ball.dx;
+        ball.y += ball.dy;
+
+        if (ball.x - CONFIG.BALL_RADIUS < 0) { ball.x = CONFIG.BALL_RADIUS; ball.dx = Math.abs(ball.dx); }
+        else if (ball.x + CONFIG.BALL_RADIUS > CONFIG.CANVAS_WIDTH) { ball.x = CONFIG.CANVAS_WIDTH - CONFIG.BALL_RADIUS; ball.dx = -Math.abs(ball.dx); }
+        if (ball.y - CONFIG.BALL_RADIUS < 0) { ball.y = CONFIG.BALL_RADIUS; ball.dy = Math.abs(ball.dy); }
+
+        let hitP = false;
+        for (const p of game.players) {
+            const pw = playerPaddleWidth(p);
+            const pr = { left: p.x, right: p.x + pw, top: p.y, bottom: p.y + CONFIG.PADDLE_HEIGHT };
+            const br = { left: ball.x - CONFIG.BALL_RADIUS, right: ball.x + CONFIG.BALL_RADIUS, top: ball.y - CONFIG.BALL_RADIUS, bottom: ball.y + CONFIG.BALL_RADIUS };
+            if (rectIntersect(br, pr) && ball.dy > 0) {
+                game.lastPaddleHitPlayerId = p.id;
+                const hitPos = (ball.x - p.x) / pw;
+                const angle = Math.max(-Math.PI/3, Math.min(Math.PI/3, hitPos * Math.PI - Math.PI/2));
+                const speed = Math.sqrt(ball.dx * ball.dx + ball.dy * ball.dy);
+                ball.dx = Math.sin(angle) * speed;
+                ball.dy = -Math.cos(angle) * speed;
+                ball.y = p.y - CONFIG.BALL_RADIUS;
+                hitP = true;
+                break;
+            }
+        }
+
+        if (!hitP) {
+            for (const b of game.bricks) {
+                if (!b.alive) continue;
+                const br = { left: b.x, right: b.x + b.width, top: b.y, bottom: b.y + b.height };
+                const ballR = { left: ball.x - CONFIG.BALL_RADIUS, right: ball.x + CONFIG.BALL_RADIUS, top: ball.y - CONFIG.BALL_RADIUS, bottom: ball.y + CONFIG.BALL_RADIUS };
+                if (rectIntersect(ballR, br)) {
+                    b.alive = false;
+                    const s = game.players.find(p => p.id === game.lastPaddleHitPlayerId);
+                    if (s) {
+                        s.score += CONFIG.POINTS_PER_BRICK;
+                        if (s.score - s.lastLifeScore >= CONFIG.LIFE_REWARD_THRESHOLD) {
+                            game.lives++;
+                            s.lastLifeScore += CONFIG.LIFE_REWARD_THRESHOLD;
+                        }
+                    }
+                    if (Math.random() < CONFIG.POWERUP_PROBABILITY) {
+                        const types = ['W', 'P', 'M'];
+                        game.powerups.push({
+                            x: b.x + b.width/2 - CONFIG.POWERUP_SIZE/2,
+                            y: b.y + b.height/2,
+                            type: types[Math.floor(Math.random() * types.length)],
+                            width: CONFIG.POWERUP_SIZE, height: CONFIG.POWERUP_SIZE
+                        });
+                    }
+                    const overlapLeft = ball.x + CONFIG.BALL_RADIUS - br.left;
+                    const overlapRight = br.right - (ball.x - CONFIG.BALL_RADIUS);
+                    const overlapTop = ball.y + CONFIG.BALL_RADIUS - br.top;
+                    const overlapBottom = br.bottom - (ball.y - CONFIG.BALL_RADIUS);
+                    const minO = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
+                    if (minO === overlapLeft) { ball.x = br.left - CONFIG.BALL_RADIUS; ball.dx = -Math.abs(ball.dx); }
+                    else if (minO === overlapRight) { ball.x = br.right + CONFIG.BALL_RADIUS; ball.dx = Math.abs(ball.dx); }
+                    else if (minO === overlapTop) { ball.y = br.top - CONFIG.BALL_RADIUS; ball.dy = -Math.abs(ball.dy); }
+                    else if (minO === overlapBottom) { ball.y = br.bottom + CONFIG.BALL_RADIUS; ball.dy = Math.abs(ball.dy); }
+                    break;
+                }
+            }
+        }
+
+        if (ball.y + CONFIG.BALL_RADIUS > CONFIG.CANVAS_HEIGHT) {
+            game.balls.splice(i, 1);
+            if (game.balls.length === 0) {
+                game.lives--;
+                if (game.lives <= 0) game.status = 'gameover';
+                else resetBall();
             }
         }
     }
-    
-    // 砖块碰撞
-    for (const brick of game.bricks) {
-        if (!brick.alive) continue;
-        const brickRect = { left: brick.x, right: brick.x + brick.width, top: brick.y, bottom: brick.y + brick.height };
-        const ballRect = { left: game.ball.x - CONFIG.BALL_RADIUS, right: game.ball.x + CONFIG.BALL_RADIUS, top: game.ball.y - CONFIG.BALL_RADIUS, bottom: game.ball.y + CONFIG.BALL_RADIUS };
-        if (rectIntersect(ballRect, brickRect)) {
-            brick.alive = false;
-            const scorer = game.players.find(p => p.id === game.lastPaddleHitPlayerId);
-            if (scorer) scorer.score += CONFIG.POINTS_PER_BRICK;
-            
-            const overlapLeft = game.ball.x + CONFIG.BALL_RADIUS - brickRect.left;
-            const overlapRight = brickRect.right - (game.ball.x - CONFIG.BALL_RADIUS);
-            const overlapTop = game.ball.y + CONFIG.BALL_RADIUS - brickRect.top;
-            const overlapBottom = brickRect.bottom - (game.ball.y - CONFIG.BALL_RADIUS);
 
-            const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
-
-            if (minOverlap === overlapLeft) {
-                game.ball.x = brickRect.left - CONFIG.BALL_RADIUS;
-                game.ball.dx = -Math.abs(game.ball.dx);
-            } else if (minOverlap === overlapRight) {
-                game.ball.x = brickRect.right + CONFIG.BALL_RADIUS;
-                game.ball.dx = Math.abs(game.ball.dx);
-            } else if (minOverlap === overlapTop) {
-                game.ball.y = brickRect.top - CONFIG.BALL_RADIUS;
-                game.ball.dy = -Math.abs(game.ball.dy);
-            } else if (minOverlap === overlapBottom) {
-                game.ball.y = brickRect.bottom + CONFIG.BALL_RADIUS;
-                game.ball.dy = Math.abs(game.ball.dy);
+    for (let i = game.powerups.length - 1; i >= 0; i--) {
+        const pu = game.powerups[i];
+        pu.y += CONFIG.POWERUP_SPEED;
+        for (const p of game.players) {
+            const pw = playerPaddleWidth(p);
+            const pr = { left: p.x, right: p.x + pw, top: p.y, bottom: p.y + CONFIG.PADDLE_HEIGHT };
+            const pur = { left: pu.x, right: pu.x + pu.width, top: pu.y, bottom: pu.y + pu.height };
+            if (rectIntersect(pur, pr)) {
+                if (pu.type === 'W') {
+                    p.paddleWidth = CONFIG.PADDLE_WIDTH * 1.5;
+                    if (p.widerTimer) clearTimeout(p.widerTimer);
+                    p.widerTimer = setTimeout(() => { p.paddleWidth = CONFIG.PADDLE_WIDTH; }, CONFIG.POWERUP_DURATION);
+                } else if (pu.type === 'P') {
+                    p.score += CONFIG.BONUS_POINTS;
+                    if (p.score - p.lastLifeScore >= CONFIG.LIFE_REWARD_THRESHOLD) { game.lives++; p.lastLifeScore += CONFIG.LIFE_REWARD_THRESHOLD; }
+                } else if (pu.type === 'M') {
+                    if (game.balls.length > 0) {
+                        const b = game.balls[0];
+                        game.balls.push({ x: b.x, y: b.y, dx: -b.dx, dy: b.dy }, { x: b.x, y: b.y, dx: b.dx * 0.5, dy: -Math.abs(b.dy) });
+                    }
+                }
+                game.powerups.splice(i, 1);
+                break;
             }
-            break;
         }
+        if (pu && pu.y > CONFIG.CANVAS_HEIGHT) game.powerups.splice(i, 1);
     }
-    
-    // 底部检测
-    if (game.ball.y + CONFIG.BALL_RADIUS > CONFIG.CANVAS_HEIGHT) {
-        game.lives--;
-        if (game.lives <= 0) {
-            game.status = 'gameover';
-        } else {
-            resetBall();
-        }
-    }
-    
-    // 胜利检测
-    if (game.bricks.every(b => !b.alive)) {
-        game.status = 'win';
-    }
-    
+    if (game.bricks.every(b => !b.alive)) game.status = 'win';
     broadcastGameState();
-    setTimeout(gameLoop, 16); // ~60fps
+    setTimeout(gameLoop, 16);
 }
 
-// 广播游戏状态
 function broadcastGameState() {
     const state = {
         type: 'gameState',
-        ball: game.ball,
+        balls: game.balls,
         bricks: game.bricks,
+        powerups: game.powerups,
         players: game.players.map(p => ({
-            id: p.id,
-            x: p.x,
-            y: p.y,
-            color: p.color,
-            score: p.score
+            id: p.id, x: p.x, y: p.y, color: p.color, score: p.score, paddleWidth: p.paddleWidth
         })),
         lives: game.lives,
         status: game.status
     };
     const message = JSON.stringify(state);
-    wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(message);
-        }
-    });
+    wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(message); });
 }
 
-// 启动游戏循环
 gameLoop();
-
-server.listen(PORT, () => {
-    console.log(`Multi-breakout server running on http://localhost:${PORT}`);
-});
+server.listen(PORT, () => { console.log(`Server running on http://localhost:${PORT}`); });
