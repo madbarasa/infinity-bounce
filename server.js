@@ -54,7 +54,7 @@ const CONFIG = {
     BRICK_HEIGHT: 20,
     BRICK_PADDING: 5,
     BRICK_OFFSET_TOP: 60,
-    INITIAL_LIVES: 3,
+    INITIAL_LIVES: 10,
     POINTS_PER_BRICK: 10,
     MAX_PLAYERS: 4,
     PLAYER_COLORS: ['#00f5d4', '#9b5de5', '#f15bb5', '#fee440'],
@@ -115,6 +115,7 @@ wss.on('connection', (ws) => {
                     id: data.playerId,
                     color: playerColor,
                     x: 0,
+                    targetX: 0,
                     y: CONFIG.CANVAS_HEIGHT - CONFIG.PADDLE_HEIGHT - 10,
                     left: false,
                     right: false,
@@ -133,8 +134,7 @@ wss.on('connection', (ws) => {
                     player.left = data.left;
                     player.right = data.right;
                     if (data.mouseX !== null && data.mouseX !== undefined) {
-                        player.x = data.mouseX - player.paddleWidth / 2;
-                        player.x = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - player.paddleWidth, player.x));
+                        player.targetX = data.mouseX - playerPaddleWidth(player) / 2;
                     }
                 }
             } else if (data.type === 'command') {
@@ -227,8 +227,18 @@ function gameLoop() {
     }
 
     game.players.forEach(p => {
-        if (p.left) p.x -= CONFIG.PADDLE_SPEED;
-        if (p.right) p.x += CONFIG.PADDLE_SPEED;
+        if (p.left || p.right) {
+            p.targetX = null;
+            if (p.left) p.x -= CONFIG.PADDLE_SPEED;
+            if (p.right) p.x += CONFIG.PADDLE_SPEED;
+        } else if (p.targetX !== undefined && p.targetX !== null) {
+            const diff = p.targetX - p.x;
+            if (Math.abs(diff) > CONFIG.PADDLE_SPEED) {
+                p.x += Math.sign(diff) * CONFIG.PADDLE_SPEED;
+            } else {
+                p.x = p.targetX;
+            }
+        }
         p.x = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - playerPaddleWidth(p), p.x));
     });
 

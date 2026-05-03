@@ -228,7 +228,7 @@ function sendInput() {
         lastSentInput = inputStr;
     }
 }
-setInterval(sendInput, 16); // 提高心跳频率至 60fps
+setInterval(sendInput, 33); 
 
 function updateUI() {
     const total = gameState.players.reduce((sum, p) => sum + (p.score || 0), 0);
