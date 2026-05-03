@@ -199,6 +199,9 @@ function connect() {
         }
         if (msg.type === 'gameState') {
             targetState = msg;
+            // 立即同步状态，确保 UI 菜单能及时切换
+            gameState.status = msg.status;
+            gameState.lives = msg.lives;
             
             // 处理增量砖块销毁
             if (msg.destroyedBricks && gameState.bricks.length > 0) {
@@ -237,6 +240,7 @@ function connect() {
             gameState.lives = msg.lives;
             gameState.status = msg.status;
             targetState = JSON.parse(JSON.stringify(gameState));
+            updateUI(); // 初始状态也需要更新 UI
         } else if (msg.type === 'playerId') {
             playerId = msg.playerId;
         } else if (msg.type === 'error') {
