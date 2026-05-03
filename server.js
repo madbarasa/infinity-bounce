@@ -77,7 +77,8 @@ let game = {
     players: [],
     powerups: [],
     lives: CONFIG.INITIAL_LIVES,
-    lastPaddleHitPlayerId: null
+    lastPaddleHitPlayerId: null,
+    destroyedBrickIndices: [] // 用于存储本帧被销毁的砖块索引
 };
 
 function initBricks() {
@@ -127,6 +128,7 @@ wss.on('connection', (ws) => {
                 };
                 game.players.push(player);
                 repositionAllPaddles();
+                broadcastFullState(ws); // 新玩家加入时发送完整状态
                 broadcastGameState();
             } else if (data.type === 'input') {
                 const player = game.players.find(p => p.id === data.playerId);
@@ -270,12 +272,14 @@ function gameLoop() {
         }
 
         if (!hitP) {
-            for (const b of game.bricks) {
+            for (let idx = 0; idx < game.bricks.length; idx++) {
+                const b = game.bricks[idx];
                 if (!b.alive) continue;
                 const br = { left: b.x, right: b.x + b.width, top: b.y, bottom: b.y + b.height };
                 const ballR = { left: ball.x - CONFIG.BALL_RADIUS, right: ball.x + CONFIG.BALL_RADIUS, top: ball.y - CONFIG.BALL_RADIUS, bottom: ball.y + CONFIG.BALL_RADIUS };
                 if (rectIntersect(ballR, br)) {
                     b.alive = false;
+                    game.destroyedBrickIndices.push(idx); // 记录被销毁的索引
                     const s = game.players.find(p => p.id === game.lastPaddleHitPlayerId);
                     if (s) {
                         s.score += CONFIG.POINTS_PER_BRICK;
@@ -353,16 +357,41 @@ function broadcastGameState() {
     const state = {
         type: 'gameState',
         balls: game.balls,
-        bricks: game.bricks,
         powerups: game.powerups,
         players: game.players.map(p => ({
             id: p.id, x: p.x, y: p.y, color: p.color, score: p.score, paddleWidth: p.paddleWidth
         })),
         lives: game.lives,
-        status: game.status
+        status: game.status,
+        timestamp: Date.now()
     };
+    
+    // 如果有砖块被销毁，发送增量更新
+    if (game.destroyedBrickIndices.length > 0) {
+        state.destroyedBricks = [...game.destroyedBrickIndices];
+        game.destroyedBrickIndices = []; // 清空缓存
+    }
+
     const message = JSON.stringify(state);
     wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(message); });
+}
+
+function broadcastFullState(ws) {
+    const state = {
+        type: 'fullState',
+        balls: game.balls,
+        bricks: game.bricks.map(b => b.alive), // 仅发送生存状态位
+        players: game.players.map(p => ({
+            id: p.id, x: p.x, y: p.y, color: p.color, score: p.score, paddleWidth: p.paddleWidth
+        })),
+        lives: game.lives,
+        status: game.status,
+        config: {
+            BRICK_ROWS: CONFIG.BRICK_ROWS,
+            BRICK_COLS: CONFIG.BRICK_COLS
+        }
+    };
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(state));
 }
 
 gameLoop();

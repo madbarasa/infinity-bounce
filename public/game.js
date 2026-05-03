@@ -34,9 +34,13 @@ let gameState = {
     bricks: [],
     players: [],
     powerups: [],
-    lives: (typeof CONFIG !== 'undefined' ? CONFIG.INITIAL_LIVES : 3),
+    lives: 10,
     status: 'waiting'
 };
+
+// 状态插值缓冲
+let targetState = null;
+let lerpFactor = 0.25; // 插值系数，值越小越平滑但延迟越高
 
 const keys = { left: false, right: false };
 const mouse = { x: null };
@@ -194,9 +198,45 @@ function connect() {
             return;
         }
         if (msg.type === 'gameState') {
-            gameState = msg;
+            targetState = msg;
+            
+            // 处理增量砖块销毁
+            if (msg.destroyedBricks && gameState.bricks.length > 0) {
+                msg.destroyedBricks.forEach(idx => {
+                    if (gameState.bricks[idx]) gameState.bricks[idx].alive = false;
+                });
+            }
+            
             updateUI();
-            draw();
+            // 不再直接调用 draw()，由 requestAnimationFrame 驱动
+        } else if (msg.type === 'fullState') {
+            // 初始化砖块状态
+            const colors = ['#f15bb5', '#9b5de5', '#00f5d4', '#fee440', '#ffffff'];
+            const brickRows = msg.config.BRICK_ROWS;
+            const brickCols = msg.config.BRICK_COLS;
+            const brickWidth = 70;
+            const brickHeight = 20;
+            const brickPadding = 5;
+            const offsetTop = 60;
+            const offsetLeft = (800 - (brickCols * brickWidth + (brickCols - 1) * brickPadding)) / 2;
+
+            gameState.bricks = [];
+            for (let row = 0; row < brickRows; row++) {
+                for (let col = 0; col < brickCols; col++) {
+                    gameState.bricks.push({
+                        x: col * (brickWidth + brickPadding) + offsetLeft,
+                        y: row * (brickHeight + brickPadding) + offsetTop,
+                        width: brickWidth,
+                        height: brickHeight,
+                        color: colors[row % colors.length],
+                        alive: msg.bricks[row * brickCols + col]
+                    });
+                }
+            }
+            gameState.players = msg.players;
+            gameState.lives = msg.lives;
+            gameState.status = msg.status;
+            targetState = JSON.parse(JSON.stringify(gameState));
         } else if (msg.type === 'playerId') {
             playerId = msg.playerId;
         } else if (msg.type === 'error') {
@@ -374,21 +414,62 @@ function sendCommand(cmd) {
 window.addEventListener('load', () => {
     connect();
 
+    function interpolate() {
+        if (!targetState) return;
+
+        // 状态平滑过渡
+        gameState.status = targetState.status;
+        gameState.lives = targetState.lives;
+
+        // 插值处理玩家位置
+        targetState.players.forEach(targetP => {
+            let p = gameState.players.find(lp => lp.id === targetP.id);
+            if (!p) {
+                gameState.players.push({ ...targetP });
+            } else {
+                // 如果是本地玩家，使用特殊处理（Reconciliation）
+                if (targetP.id === playerId) {
+                    // 仅当偏差过大时纠偏
+                    if (Math.abs(p.x - targetP.x) > 100) p.x = targetP.x;
+                } else {
+                    p.x += (targetP.x - p.x) * lerpFactor;
+                }
+                p.score = targetP.score;
+                p.paddleWidth = targetP.paddleWidth;
+            }
+        });
+
+        // 插值处理球位置
+        if (targetState.balls.length !== gameState.balls.length) {
+            gameState.balls = JSON.parse(JSON.stringify(targetState.balls));
+        } else {
+            gameState.balls.forEach((ball, i) => {
+                const targetBall = targetState.balls[i];
+                ball.x += (targetBall.x - ball.x) * lerpFactor;
+                ball.y += (targetBall.y - ball.y) * lerpFactor;
+            });
+        }
+
+        // 道具直接更新（通常数量少，且位置不连续）
+        gameState.powerups = targetState.powerups;
+    }
+
     function loop() {
         if (playerId && gameState.status === 'playing') {
+            interpolate(); // 执行平滑插值
+
             const myPlayer = gameState.players.find(p => p.id === playerId);
             if (myPlayer && myLocalX === null) {
                 myLocalX = myPlayer.x;
             }
             if (myLocalX !== null) {
-                if (keys.left) {
-                    myLocalX -= CONFIG.PADDLE_SPEED;
-                }
-                if (keys.right) {
-                    myLocalX += CONFIG.PADDLE_SPEED;
-                }
-                const pWidth = (gameState.players.find(p => p.id === playerId) || {}).paddleWidth || CONFIG.PADDLE_WIDTH;
+                if (keys.left) myLocalX -= CONFIG.PADDLE_SPEED;
+                if (keys.right) myLocalX += CONFIG.PADDLE_SPEED;
+                const pWidth = (myPlayer || {}).paddleWidth || CONFIG.PADDLE_WIDTH;
                 myLocalX = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - pWidth, myLocalX));
+                
+                // 本地渲染直接使用预测值，无视服务端返回的旧值
+                if (myPlayer) myPlayer.x = myLocalX;
             }
         }
         draw();
