@@ -97,6 +97,7 @@ body {
     display: block;
     max-width: 100%;
     height: auto;
+    touch-action: none;
 }
 
 .menu-overlay {

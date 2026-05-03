@@ -1,8 +1,9 @@
 // 多人协作打砖块 - 游戏客户端
 // 支持 1-4 名玩家
 
-
-
+// ==========================================
+// 1. CONFIG (配置分区)
+// ==========================================
 const COLORS = {
     players: ['#00f5d4', '#9b5de5', '#f15bb5', '#fee440'], // Cyan, Purple, Pink, Yellow
     ball: '#ffffff',
@@ -11,6 +12,9 @@ const COLORS = {
 
 const HIGHSCORE_KEY = 'multi_breakout_highscore';
 
+// ==========================================
+// 2. GLOBAL STATE (全局状态分区)
+// ==========================================
 let ws;
 let wsGeneration = 0;
 let reconnectTimer = null;
@@ -24,7 +28,7 @@ let gameState = {
     ball: null,
     bricks: [],
     players: [],
-    lives: CONFIG.INITIAL_LIVES,
+    lives: (typeof CONFIG !== 'undefined' ? CONFIG.INITIAL_LIVES : 3),
     status: 'waiting'
 };
 
@@ -42,6 +46,9 @@ const startBtn = document.getElementById('start-btn');
 const pauseBtn = document.getElementById('pause-btn');
 const restartBtn = document.getElementById('restart-btn');
 
+// ==========================================
+// 3. UTILITIES (工具函数分区)
+// ==========================================
 function generatePlayerId() {
     return 'player_' + Math.random().toString(36).substr(2, 9);
 }
@@ -74,6 +81,79 @@ function fillRoundRect(context, x, y, w, h, r) {
     context.fill();
 }
 
+function handleInputX(clientX) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    mouse.x = (clientX - rect.left) * scaleX;
+    myLocalX = mouse.x - CONFIG.PADDLE_WIDTH / 2;
+}
+
+// ==========================================
+// 4. ASSETS (资源配置分区)
+// ==========================================
+// 目前由 CSS 和代码绘制，预留分区
+
+// ==========================================
+// 5. EVENT HANDLERS (事件处理分区)
+// ==========================================
+document.addEventListener('keydown', (e) => {
+    if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = true;
+    if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = true;
+    if (e.code === 'Space') {
+        e.preventDefault();
+        sendCommand('pause');
+    }
+});
+
+document.addEventListener('keyup', (e) => {
+    if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = false;
+    if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = false;
+});
+
+canvas.addEventListener('mousemove', (e) => {
+    handleInputX(e.clientX);
+});
+
+// 移动端触摸支持
+canvas.addEventListener('touchstart', (e) => {
+    if (e.touches.length > 0) {
+        handleInputX(e.touches[0].clientX);
+    }
+}, { passive: true });
+
+canvas.addEventListener('touchmove', (e) => {
+    if (e.touches.length > 0) {
+        handleInputX(e.touches[0].clientX);
+    }
+}, { passive: true });
+
+startBtn.addEventListener('click', () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        reconnectAttempt = 0;
+        clearReconnect();
+        connect();
+        return;
+    }
+    if (gameState.status === 'paused') {
+        sendCommand('pause');
+    } else if (gameState.status === 'gameover' || gameState.status === 'win') {
+        sendCommand('restart');
+    } else {
+        sendCommand('start');
+    }
+});
+
+pauseBtn.addEventListener('click', () => {
+    sendCommand('pause');
+});
+
+restartBtn.addEventListener('click', () => {
+    sendCommand('restart');
+});
+
+// ==========================================
+// 6. CORE LOGIC (核心逻辑分区)
+// ==========================================
 function connect() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
@@ -183,7 +263,7 @@ function updateUI() {
 }
 
 function draw() {
-    ctx.fillStyle = '#0a0a0f';
+    ctx.fillStyle = '#050505';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     for (const brick of gameState.bricks) {
@@ -245,51 +325,9 @@ function sendCommand(cmd) {
     ws.send(JSON.stringify({ type: 'command', command: cmd }));
 }
 
-document.addEventListener('keydown', (e) => {
-    if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = true;
-    if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = true;
-    if (e.code === 'Space') {
-        e.preventDefault();
-        sendCommand('pause');
-    }
-});
-
-document.addEventListener('keyup', (e) => {
-    if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = false;
-    if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = false;
-});
-
-canvas.addEventListener('mousemove', (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    mouse.x = (e.clientX - rect.left) * scaleX;
-    myLocalX = mouse.x - CONFIG.PADDLE_WIDTH / 2;
-});
-
-startBtn.addEventListener('click', () => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-        reconnectAttempt = 0;
-        clearReconnect();
-        connect();
-        return;
-    }
-    if (gameState.status === 'paused') {
-        sendCommand('pause');
-    } else if (gameState.status === 'gameover' || gameState.status === 'win') {
-        sendCommand('restart');
-    } else {
-        sendCommand('start');
-    }
-});
-
-pauseBtn.addEventListener('click', () => {
-    sendCommand('pause');
-});
-
-restartBtn.addEventListener('click', () => {
-    sendCommand('restart');
-});
-
+// ==========================================
+// 7. INITIALIZATION (初始化分区)
+// ==========================================
 window.addEventListener('load', () => {
     connect();
 
