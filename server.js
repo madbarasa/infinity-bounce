@@ -45,7 +45,8 @@ const CONFIG = {
     CANVAS_HEIGHT: 600,
     PADDLE_WIDTH: 80,
     PADDLE_HEIGHT: 12,
-    PADDLE_SPEED: 7,
+    // 每 tick 位移；在 SERVER_TICK_MS=8 下为 3.5 => 约 437.5 px/s（与旧 16ms*7 手感一致）
+    PADDLE_SPEED: 3.5,
     BALL_RADIUS: 8,
     BALL_SPEED: 7,
     BRICK_ROWS: 5,
@@ -64,7 +65,8 @@ const CONFIG = {
     POWERUP_PROBABILITY: 0.2,
     POWERUP_DURATION: 10000, // 10秒
     BONUS_POINTS: 50,
-    LIFE_REWARD_THRESHOLD: 100
+    LIFE_REWARD_THRESHOLD: 100,
+    SERVER_TICK_MS: 8
 };
 
 CONFIG.BRICK_OFFSET_LEFT = (CONFIG.CANVAS_WIDTH - (CONFIG.BRICK_COLS * CONFIG.BRICK_WIDTH + (CONFIG.BRICK_COLS - 1) * CONFIG.BRICK_PADDING)) / 2;
@@ -139,6 +141,14 @@ wss.on('connection', (ws) => {
                         player.targetX = data.mouseX - playerPaddleWidth(player) / 2;
                     }
                 }
+            } else if (data.type === 'ping') {
+                ws.send(
+                    JSON.stringify({
+                        type: 'pong',
+                        clientTs: data.clientTs,
+                        serverTs: Date.now()
+                    })
+                );
             } else if (data.type === 'command') {
                 if (data.command === 'start' && game.status === 'waiting' && game.players.length >= 1) {
                     game.status = 'playing';
@@ -218,13 +228,11 @@ function rectIntersect(r1, r2) {
 
 function gameLoop() {
     if (game.status !== 'playing') {
-        setTimeout(gameLoop, 16);
         return;
     }
     if (game.players.length === 0) {
         game.status = 'waiting';
         broadcastGameState();
-        setTimeout(gameLoop, 16);
         return;
     }
 
@@ -234,12 +242,8 @@ function gameLoop() {
             if (p.left) p.x -= CONFIG.PADDLE_SPEED;
             if (p.right) p.x += CONFIG.PADDLE_SPEED;
         } else if (p.targetX !== undefined && p.targetX !== null) {
-            const diff = p.targetX - p.x;
-            if (Math.abs(diff) > CONFIG.PADDLE_SPEED) {
-                p.x += Math.sign(diff) * CONFIG.PADDLE_SPEED;
-            } else {
-                p.x = p.targetX;
-            }
+            // 鼠标/触摸输入直接贴合目标位置，避免按速度追赶造成明显拖拽延迟
+            p.x = p.targetX;
         }
         p.x = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - playerPaddleWidth(p), p.x));
     });
@@ -350,7 +354,6 @@ function gameLoop() {
     }
     if (game.bricks.every(b => !b.alive)) game.status = 'win';
     broadcastGameState();
-    setTimeout(gameLoop, 16);
 }
 
 function broadcastGameState() {
@@ -394,5 +397,5 @@ function broadcastFullState(ws) {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(state));
 }
 
-gameLoop();
+setInterval(gameLoop, CONFIG.SERVER_TICK_MS);
 server.listen(PORT, () => { console.log(`Server running on http://localhost:${PORT}`); });

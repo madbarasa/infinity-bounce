@@ -40,7 +40,18 @@ let gameState = {
 
 // 状态插值缓冲
 let targetState = null;
-let lerpFactor = 0.25; // 插值系数，值越小越平滑但延迟越高
+let lerpFactor = 0.55; // 插值系数，值越小越平滑但延迟越高
+const INPUT_SEND_INTERVAL_MS = 8; // 约 125Hz，降低输入到服务端的等待时间
+const NET_CONFIG = {
+    PING_INTERVAL_MS: 1000,
+    RTT_EMA_ALPHA: 0.2,
+    RTT_MIN_MS: 20,
+    RTT_MAX_MS: 220,
+    LERP_MIN: 0.35,
+    LERP_MAX: 0.75
+};
+let smoothedRttMs = null;
+let pingTimer = null;
 
 const keys = { left: false, right: false };
 const mouse = { x: null };
@@ -96,7 +107,8 @@ function handleInputX(clientX) {
     const scaleX = canvas.width / rect.width;
     mouse.x = (clientX - rect.left) * scaleX;
     
-    // 移除立即发送，交由 60fps 的定时器统一发送，防止由于高刷鼠标导致的性能爆炸
+    // 鼠标/触摸位移要尽量即时上报，避免“拖泥带水”的输入迟滞
+    sendInput();
 }
 
 // ==========================================
@@ -110,6 +122,9 @@ function handleInputX(clientX) {
 document.addEventListener('keydown', (e) => {
     if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = true;
     if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = true;
+    if (e.code === 'ArrowLeft' || e.code === 'KeyA' || e.code === 'ArrowRight' || e.code === 'KeyD') {
+        sendInput(true);
+    }
     if (e.code === 'Space') {
         e.preventDefault();
         sendCommand('pause');
@@ -119,6 +134,9 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('keyup', (e) => {
     if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = false;
     if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = false;
+    if (e.code === 'ArrowLeft' || e.code === 'KeyA' || e.code === 'ArrowRight' || e.code === 'KeyD') {
+        sendInput(true);
+    }
 });
 
 canvas.addEventListener('mousemove', (e) => {
@@ -186,6 +204,7 @@ function connect() {
                 playerId: playerId
             })
         );
+        startPingLoop();
     };
 
     socket.onmessage = (event) => {
@@ -212,7 +231,17 @@ function connect() {
             
             updateUI();
             // 不再直接调用 draw()，由 requestAnimationFrame 驱动
+        } else if (msg.type === 'pong') {
+            if (typeof msg.clientTs === 'number') {
+                const rtt = Math.max(0, performance.now() - msg.clientTs);
+                if (smoothedRttMs === null) {
+                    smoothedRttMs = rtt;
+                } else {
+                    smoothedRttMs = smoothedRttMs * (1 - NET_CONFIG.RTT_EMA_ALPHA) + rtt * NET_CONFIG.RTT_EMA_ALPHA;
+                }
+            }
         } else if (msg.type === 'fullState') {
+            myLocalX = null;
             // 初始化砖块状态
             const colors = ['#f15bb5', '#9b5de5', '#00f5d4', '#fee440', '#ffffff'];
             const brickRows = msg.config.BRICK_ROWS;
@@ -251,13 +280,36 @@ function connect() {
     socket.onclose = () => {
         if (gen !== wsGeneration) return;
         console.log('Disconnected');
+        stopPingLoop();
         showMenu('连接断开', '正在尝试自动重连…', '重连');
         scheduleReconnect();
     };
 }
 
+function startPingLoop() {
+    stopPingLoop();
+    pingTimer = setInterval(() => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ type: 'ping', clientTs: performance.now() }));
+    }, NET_CONFIG.PING_INTERVAL_MS);
+}
+
+function stopPingLoop() {
+    if (pingTimer) {
+        clearInterval(pingTimer);
+        pingTimer = null;
+    }
+}
+
+function updateAdaptiveLerpFactor() {
+    if (smoothedRttMs === null) return;
+    const clamped = Math.max(NET_CONFIG.RTT_MIN_MS, Math.min(NET_CONFIG.RTT_MAX_MS, smoothedRttMs));
+    const t = (clamped - NET_CONFIG.RTT_MIN_MS) / (NET_CONFIG.RTT_MAX_MS - NET_CONFIG.RTT_MIN_MS);
+    lerpFactor = NET_CONFIG.LERP_MAX - t * (NET_CONFIG.LERP_MAX - NET_CONFIG.LERP_MIN);
+}
+
 let lastSentInput = '';
-function sendInput() {
+function sendInput(force = false) {
     if (!ws || ws.readyState !== WebSocket.OPEN || !playerId) return;
     const inputState = {
         type: 'input',
@@ -267,12 +319,12 @@ function sendInput() {
         mouseX: mouse.x
     };
     const inputStr = JSON.stringify(inputState);
-    if (inputStr !== lastSentInput) {
+    if (force || inputStr !== lastSentInput) {
         ws.send(inputStr);
         lastSentInput = inputStr;
     }
 }
-setInterval(sendInput, 33); 
+setInterval(sendInput, INPUT_SEND_INTERVAL_MS);
 
 function updateUI() {
     const total = gameState.players.reduce((sum, p) => sum + (p.score || 0), 0);
@@ -417,6 +469,7 @@ function sendCommand(cmd) {
 // ==========================================
 window.addEventListener('load', () => {
     connect();
+    let lastFrameAt = performance.now();
 
     function interpolate() {
         if (!targetState) return;
@@ -459,6 +512,13 @@ window.addEventListener('load', () => {
     }
 
     function loop() {
+        const now = performance.now();
+        const deltaSeconds = Math.min((now - lastFrameAt) / 1000, 0.05);
+        lastFrameAt = now;
+        const serverTickRate = CONFIG.SERVER_TICK_MS ? 1000 / CONFIG.SERVER_TICK_MS : 60;
+        const predictionStep = CONFIG.PADDLE_SPEED * deltaSeconds * serverTickRate;
+        updateAdaptiveLerpFactor();
+
         if (playerId && gameState.status === 'playing') {
             interpolate(); // 执行平滑插值
 
@@ -467,8 +527,8 @@ window.addEventListener('load', () => {
                 myLocalX = myPlayer.x;
             }
             if (myLocalX !== null) {
-                if (keys.left) myLocalX -= CONFIG.PADDLE_SPEED;
-                if (keys.right) myLocalX += CONFIG.PADDLE_SPEED;
+                if (keys.left) myLocalX -= predictionStep;
+                if (keys.right) myLocalX += predictionStep;
                 const pWidth = (myPlayer || {}).paddleWidth || CONFIG.PADDLE_WIDTH;
                 myLocalX = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - pWidth, myLocalX));
                 
