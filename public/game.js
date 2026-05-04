@@ -6,7 +6,12 @@
 const COLORS = {
     players: ['#4fc3f7', '#ab47bc', '#42a5f5', '#66bb6a'],
     ball: '#ffffff',
-    bricks: ['#ef5350', '#ab47bc', '#42a5f5', '#26a69a', '#66bb6a']
+    bricks: ['#ef5350', '#ab47bc', '#42a5f5', '#26a69a', '#66bb6a'],
+    powerups: {
+        W: '#00f5d4',
+        P: '#fee440',
+        M: '#ffffff'
+    }
 };
 
 const HIGHSCORE_KEY = 'multi_breakout_highscore';
@@ -21,7 +26,8 @@ let myColor = null;
 let myLocalX = null;
 
 let gameState = {
-    ball: null,
+    balls: [],
+    powerups: [],
     bricks: [],
     players: [],
     lives: CONFIG.INITIAL_LIVES,
@@ -110,6 +116,8 @@ function connect() {
         }
         if (msg.type === 'gameState') {
             gameState = msg;
+            if (!Array.isArray(gameState.balls)) gameState.balls = [];
+            if (!Array.isArray(gameState.powerups)) gameState.powerups = [];
             updateUI();
             draw();
         } else if (msg.type === 'playerId') {
@@ -194,29 +202,44 @@ function draw() {
 
     for (const player of gameState.players) {
         ctx.fillStyle = player.color;
-        
+        const pWidth = player.paddleWidth || CONFIG.PADDLE_WIDTH;
+
         let drawX = player.x;
         if (player.id === playerId && myLocalX !== null) {
-            drawX = myLocalX; // 使用本地预测坐标
+            drawX = myLocalX;
         }
-        
-        fillRoundRect(ctx, drawX, player.y, CONFIG.PADDLE_WIDTH, CONFIG.PADDLE_HEIGHT, 8);
+
+        fillRoundRect(ctx, drawX, player.y, pWidth, CONFIG.PADDLE_HEIGHT, 8);
 
         ctx.fillStyle = '#fff';
         ctx.font = '10px Arial';
         ctx.textAlign = 'center';
         ctx.fillText(
             player.id.substr(0, 4),
-            drawX + CONFIG.PADDLE_WIDTH / 2,
+            drawX + pWidth / 2,
             player.y - 5
         );
     }
 
-    if (gameState.ball) {
-        ctx.beginPath();
-        ctx.arc(gameState.ball.x, gameState.ball.y, CONFIG.BALL_RADIUS, 0, Math.PI * 2);
-        ctx.fillStyle = COLORS.ball;
-        ctx.fill();
+    if (gameState.balls && gameState.balls.length) {
+        for (const ball of gameState.balls) {
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, CONFIG.BALL_RADIUS, 0, Math.PI * 2);
+            ctx.fillStyle = COLORS.ball;
+            ctx.fill();
+        }
+    }
+
+    if (gameState.powerups && gameState.powerups.length) {
+        for (const pu of gameState.powerups) {
+            ctx.fillStyle = COLORS.powerups[pu.type] || '#fff';
+            fillRoundRect(ctx, pu.x, pu.y, pu.width, pu.height, 4);
+            ctx.fillStyle = '#000';
+            ctx.font = 'bold 14px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(pu.type, pu.x + pu.width / 2, pu.y + pu.height / 2);
+        }
     }
 
     if (gameState.status === 'paused') {
@@ -263,7 +286,9 @@ canvas.addEventListener('mousemove', (e) => {
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     mouse.x = (e.clientX - rect.left) * scaleX;
-    myLocalX = mouse.x - CONFIG.PADDLE_WIDTH / 2;
+    const me = gameState.players.find((p) => p.id === playerId);
+    const pw = (me && me.paddleWidth) || CONFIG.PADDLE_WIDTH;
+    myLocalX = mouse.x - pw / 2;
 });
 
 startBtn.addEventListener('click', () => {
@@ -302,7 +327,8 @@ window.addEventListener('load', () => {
             if (myLocalX !== null) {
                 if (keys.left) myLocalX -= CONFIG.PADDLE_SPEED;
                 if (keys.right) myLocalX += CONFIG.PADDLE_SPEED;
-                myLocalX = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - CONFIG.PADDLE_WIDTH, myLocalX));
+                const pw = (myPlayer && myPlayer.paddleWidth) || CONFIG.PADDLE_WIDTH;
+                myLocalX = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - pw, myLocalX));
             }
         }
         draw();

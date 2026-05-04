@@ -70,9 +70,14 @@ const CONFIG = {
     BRICK_HEIGHT: 20,
     BRICK_PADDING: 5,
     BRICK_OFFSET_TOP: 60,
-    INITIAL_LIVES: 3,
+    INITIAL_LIVES: 10,
     POINTS_PER_BRICK: 10,
-    MAX_PLAYERS: 4
+    MAX_PLAYERS: 4,
+    POWERUP_SIZE: 20,
+    POWERUP_SPEED: 2.5,
+    POWERUP_PROBABILITY: 0.2,
+    POWERUP_DURATION: 10000,
+    BONUS_POINTS: 50
 };
 
 CONFIG.BRICK_OFFSET_LEFT =
@@ -84,14 +89,10 @@ CONFIG.BRICK_OFFSET_LEFT =
 // 游戏房间状态
 let game = {
     status: 'waiting', // waiting, playing, paused, gameover, win
-    ball: {
-        x: CONFIG.CANVAS_WIDTH / 2,
-        y: CONFIG.CANVAS_HEIGHT - 100,
-        dx: CONFIG.BALL_SPEED,
-        dy: -CONFIG.BALL_SPEED
-    },
+    balls: [],
     bricks: [],
     players: [],
+    powerups: [],
     lives: CONFIG.INITIAL_LIVES,
     /** 最后一次被球击中的挡板所属玩家，用于砖块得分归属 */
     lastPaddleHitPlayerId: null
@@ -118,15 +119,18 @@ function initBricks() {
 
 initBricks();
 
+function playerPaddleWidth(p) {
+    return p.paddleWidth || CONFIG.PADDLE_WIDTH;
+}
+
 // 玩家连接
 wss.on('connection', (ws) => {
     console.log('New connection');
-    
-    // 为新玩家分配位置
+
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
-            
+
             if (data.type === 'join') {
                 if (game.players.some(p => p.ws === ws)) {
                     return;
@@ -148,6 +152,8 @@ wss.on('connection', (ws) => {
                     left: false,
                     right: false,
                     score: 0,
+                    paddleWidth: CONFIG.PADDLE_WIDTH,
+                    widerTimer: null,
                     ws
                 };
                 game.players.push(player);
@@ -158,14 +164,14 @@ wss.on('connection', (ws) => {
                 broadcastGameState();
             }
             else if (data.type === 'input') {
-                // 更新玩家输入
                 const player = game.players.find(p => p.id === data.playerId);
                 if (player) {
                     player.left = data.left;
                     player.right = data.right;
                     if (data.mouseX !== null && data.mouseX !== undefined) {
-                        player.targetX = data.mouseX - CONFIG.PADDLE_WIDTH / 2;
-                        player.targetX = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - CONFIG.PADDLE_WIDTH, player.targetX));
+                        const pw = playerPaddleWidth(player);
+                        player.targetX = data.mouseX - pw / 2;
+                        player.targetX = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - pw, player.targetX));
                     }
                 }
             }
@@ -181,9 +187,16 @@ wss.on('connection', (ws) => {
                     initBricks();
                     game.players.forEach(p => {
                         p.score = 0;
+                        p.paddleWidth = CONFIG.PADDLE_WIDTH;
+                        if (p.widerTimer) {
+                            clearTimeout(p.widerTimer);
+                            p.widerTimer = null;
+                        }
                     });
                     game.status = 'waiting';
                     game.lastPaddleHitPlayerId = null;
+                    game.powerups = [];
+                    game.balls = [];
                     resetBall();
                 }
                 broadcastGameState();
@@ -192,10 +205,12 @@ wss.on('connection', (ws) => {
             console.error('Error processing message:', e);
         }
     });
-    
+
     ws.on('close', () => {
         const playerIndex = game.players.findIndex(p => p.ws === ws);
         if (playerIndex !== -1) {
+            const p = game.players[playerIndex];
+            if (p.widerTimer) clearTimeout(p.widerTimer);
             game.players.splice(playerIndex, 1);
             repositionAllPaddles();
             console.log('Player disconnected');
@@ -227,21 +242,21 @@ function getPaddlePositions(count) {
     return positions;
 }
 
-// 重置球
+// 重置球（单球开局）
 function resetBall() {
     if (game.players.length === 0) return;
     const randomPlayer = game.players[Math.floor(Math.random() * game.players.length)];
     game.lastPaddleHitPlayerId = randomPlayer.id;
-    const angle = (Math.random() - 0.5) * Math.PI / 2; // -45 to 45 degrees
-    game.ball = {
-        x: randomPlayer.x + CONFIG.PADDLE_WIDTH / 2,
+    const angle = (Math.random() - 0.5) * Math.PI / 2;
+    const pw = playerPaddleWidth(randomPlayer);
+    game.balls = [{
+        x: randomPlayer.x + pw / 2,
         y: randomPlayer.y - CONFIG.BALL_RADIUS,
         dx: Math.sin(angle) * CONFIG.BALL_SPEED,
         dy: -Math.cos(angle) * CONFIG.BALL_SPEED
-    };
+    }];
 }
 
-// 碰撞检测
 function rectIntersect(r1, r2) {
     return !(r2.left > r1.right || r2.right < r1.left || r2.top > r1.bottom || r2.bottom < r1.top);
 }
@@ -259,7 +274,6 @@ function gameLoop() {
         return;
     }
 
-    // 更新玩家挡板位置
     game.players.forEach(player => {
         if (player.left || player.right) {
             player.targetX = null;
@@ -273,121 +287,174 @@ function gameLoop() {
                 player.x = player.targetX;
             }
         }
-        player.x = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - CONFIG.PADDLE_WIDTH, player.x));
+        const pw = playerPaddleWidth(player);
+        player.x = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - pw, player.x));
     });
-    
-    // 更新球
-    game.ball.x += game.ball.dx;
-    game.ball.y += game.ball.dy;
-    
-    // 墙壁碰撞
-    if (game.ball.x - CONFIG.BALL_RADIUS < 0) {
-        game.ball.x = CONFIG.BALL_RADIUS;
-        game.ball.dx = Math.abs(game.ball.dx);
-    } else if (game.ball.x + CONFIG.BALL_RADIUS > CONFIG.CANVAS_WIDTH) {
-        game.ball.x = CONFIG.CANVAS_WIDTH - CONFIG.BALL_RADIUS;
-        game.ball.dx = -Math.abs(game.ball.dx);
-    }
-    if (game.ball.y - CONFIG.BALL_RADIUS < 0) {
-        game.ball.y = CONFIG.BALL_RADIUS;
-        game.ball.dy = Math.abs(game.ball.dy);
-    }
-    
-    // 挡板碰撞
-    for (const player of game.players) {
-        const paddleRect = {
-            left: player.x,
-            right: player.x + CONFIG.PADDLE_WIDTH,
-            top: player.y,
-            bottom: player.y + CONFIG.PADDLE_HEIGHT
-        };
-        const ballRect = {
-            left: game.ball.x - CONFIG.BALL_RADIUS,
-            right: game.ball.x + CONFIG.BALL_RADIUS,
-            top: game.ball.y - CONFIG.BALL_RADIUS,
-            bottom: game.ball.y + CONFIG.BALL_RADIUS
-        };
-        if (rectIntersect(ballRect, paddleRect)) {
-            if (game.ball.dy > 0) {
+
+    for (let i = game.balls.length - 1; i >= 0; i--) {
+        const ball = game.balls[i];
+        ball.x += ball.dx;
+        ball.y += ball.dy;
+
+        if (ball.x - CONFIG.BALL_RADIUS < 0) {
+            ball.x = CONFIG.BALL_RADIUS;
+            ball.dx = Math.abs(ball.dx);
+        } else if (ball.x + CONFIG.BALL_RADIUS > CONFIG.CANVAS_WIDTH) {
+            ball.x = CONFIG.CANVAS_WIDTH - CONFIG.BALL_RADIUS;
+            ball.dx = -Math.abs(ball.dx);
+        }
+        if (ball.y - CONFIG.BALL_RADIUS < 0) {
+            ball.y = CONFIG.BALL_RADIUS;
+            ball.dy = Math.abs(ball.dy);
+        }
+
+        let hitPaddle = false;
+        for (const player of game.players) {
+            const pw = playerPaddleWidth(player);
+            const paddleRect = {
+                left: player.x,
+                right: player.x + pw,
+                top: player.y,
+                bottom: player.y + CONFIG.PADDLE_HEIGHT
+            };
+            const ballRect = {
+                left: ball.x - CONFIG.BALL_RADIUS,
+                right: ball.x + CONFIG.BALL_RADIUS,
+                top: ball.y - CONFIG.BALL_RADIUS,
+                bottom: ball.y + CONFIG.BALL_RADIUS
+            };
+            if (rectIntersect(ballRect, paddleRect) && ball.dy > 0) {
                 game.lastPaddleHitPlayerId = player.id;
-                const hitPos = (game.ball.x - player.x) / CONFIG.PADDLE_WIDTH;
+                const hitPos = (ball.x - player.x) / pw;
                 const angle = hitPos * Math.PI - Math.PI / 2;
-                const maxAngle = Math.PI / 3; // 限制最大反射角为 60度
+                const maxAngle = Math.PI / 3;
                 const clampedAngle = Math.max(-maxAngle, Math.min(maxAngle, angle));
-                
-                const speed = Math.sqrt(game.ball.dx * game.ball.dx + game.ball.dy * game.ball.dy);
-                game.ball.dx = Math.sin(clampedAngle) * speed;
-                game.ball.dy = -Math.cos(clampedAngle) * speed;
-                game.ball.y = player.y - CONFIG.BALL_RADIUS;
+                const speed = Math.sqrt(ball.dx * ball.dx + ball.dy * ball.dy);
+                ball.dx = Math.sin(clampedAngle) * speed;
+                ball.dy = -Math.cos(clampedAngle) * speed;
+                ball.y = player.y - CONFIG.BALL_RADIUS;
+                hitPaddle = true;
+                break;
+            }
+        }
+
+        if (!hitPaddle) {
+            for (const brick of game.bricks) {
+                if (!brick.alive) continue;
+                const brickRect = { left: brick.x, right: brick.x + brick.width, top: brick.y, bottom: brick.y + brick.height };
+                const ballRect = { left: ball.x - CONFIG.BALL_RADIUS, right: ball.x + CONFIG.BALL_RADIUS, top: ball.y - CONFIG.BALL_RADIUS, bottom: ball.y + CONFIG.BALL_RADIUS };
+                if (rectIntersect(ballRect, brickRect)) {
+                    brick.alive = false;
+                    const scorer = game.players.find(p => p.id === game.lastPaddleHitPlayerId);
+                    if (scorer) scorer.score += CONFIG.POINTS_PER_BRICK;
+
+                    if (Math.random() < CONFIG.POWERUP_PROBABILITY) {
+                        const types = ['W', 'P', 'M'];
+                        game.powerups.push({
+                            x: brick.x + brick.width / 2 - CONFIG.POWERUP_SIZE / 2,
+                            y: brick.y + brick.height / 2,
+                            type: types[Math.floor(Math.random() * types.length)],
+                            width: CONFIG.POWERUP_SIZE,
+                            height: CONFIG.POWERUP_SIZE
+                        });
+                    }
+
+                    const overlapLeft = ball.x + CONFIG.BALL_RADIUS - brickRect.left;
+                    const overlapRight = brickRect.right - (ball.x - CONFIG.BALL_RADIUS);
+                    const overlapTop = ball.y + CONFIG.BALL_RADIUS - brickRect.top;
+                    const overlapBottom = brickRect.bottom - (ball.y - CONFIG.BALL_RADIUS);
+                    const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
+
+                    if (minOverlap === overlapLeft) {
+                        ball.x = brickRect.left - CONFIG.BALL_RADIUS;
+                        ball.dx = -Math.abs(ball.dx);
+                    } else if (minOverlap === overlapRight) {
+                        ball.x = brickRect.right + CONFIG.BALL_RADIUS;
+                        ball.dx = Math.abs(ball.dx);
+                    } else if (minOverlap === overlapTop) {
+                        ball.y = brickRect.top - CONFIG.BALL_RADIUS;
+                        ball.dy = -Math.abs(ball.dy);
+                    } else if (minOverlap === overlapBottom) {
+                        ball.y = brickRect.bottom + CONFIG.BALL_RADIUS;
+                        ball.dy = Math.abs(ball.dy);
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (ball.y + CONFIG.BALL_RADIUS > CONFIG.CANVAS_HEIGHT) {
+            game.balls.splice(i, 1);
+            if (game.balls.length === 0) {
+                game.lives--;
+                if (game.lives <= 0) {
+                    game.status = 'gameover';
+                } else {
+                    resetBall();
+                }
             }
         }
     }
-    
-    // 砖块碰撞
-    for (const brick of game.bricks) {
-        if (!brick.alive) continue;
-        const brickRect = { left: brick.x, right: brick.x + brick.width, top: brick.y, bottom: brick.y + brick.height };
-        const ballRect = { left: game.ball.x - CONFIG.BALL_RADIUS, right: game.ball.x + CONFIG.BALL_RADIUS, top: game.ball.y - CONFIG.BALL_RADIUS, bottom: game.ball.y + CONFIG.BALL_RADIUS };
-        if (rectIntersect(ballRect, brickRect)) {
-            brick.alive = false;
-            const scorer = game.players.find(p => p.id === game.lastPaddleHitPlayerId);
-            if (scorer) scorer.score += CONFIG.POINTS_PER_BRICK;
-            
-            const overlapLeft = game.ball.x + CONFIG.BALL_RADIUS - brickRect.left;
-            const overlapRight = brickRect.right - (game.ball.x - CONFIG.BALL_RADIUS);
-            const overlapTop = game.ball.y + CONFIG.BALL_RADIUS - brickRect.top;
-            const overlapBottom = brickRect.bottom - (game.ball.y - CONFIG.BALL_RADIUS);
 
-            const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
-
-            if (minOverlap === overlapLeft) {
-                game.ball.x = brickRect.left - CONFIG.BALL_RADIUS;
-                game.ball.dx = -Math.abs(game.ball.dx);
-            } else if (minOverlap === overlapRight) {
-                game.ball.x = brickRect.right + CONFIG.BALL_RADIUS;
-                game.ball.dx = Math.abs(game.ball.dx);
-            } else if (minOverlap === overlapTop) {
-                game.ball.y = brickRect.top - CONFIG.BALL_RADIUS;
-                game.ball.dy = -Math.abs(game.ball.dy);
-            } else if (minOverlap === overlapBottom) {
-                game.ball.y = brickRect.bottom + CONFIG.BALL_RADIUS;
-                game.ball.dy = Math.abs(game.ball.dy);
+    for (let i = game.powerups.length - 1; i >= 0; i--) {
+        const pu = game.powerups[i];
+        pu.y += CONFIG.POWERUP_SPEED;
+        let collected = false;
+        for (const p of game.players) {
+            const pw = playerPaddleWidth(p);
+            const pr = { left: p.x, right: p.x + pw, top: p.y, bottom: p.y + CONFIG.PADDLE_HEIGHT };
+            const pur = { left: pu.x, right: pu.x + pu.width, top: pu.y, bottom: pu.y + pu.height };
+            if (rectIntersect(pur, pr)) {
+                if (pu.type === 'W') {
+                    p.paddleWidth = CONFIG.PADDLE_WIDTH * 1.5;
+                    if (p.widerTimer) clearTimeout(p.widerTimer);
+                    p.widerTimer = setTimeout(() => {
+                        p.paddleWidth = CONFIG.PADDLE_WIDTH;
+                        p.widerTimer = null;
+                    }, CONFIG.POWERUP_DURATION);
+                } else if (pu.type === 'P') {
+                    p.score += CONFIG.BONUS_POINTS;
+                } else if (pu.type === 'M') {
+                    if (game.balls.length > 0) {
+                        const b = game.balls[0];
+                        game.balls.push(
+                            { x: b.x, y: b.y, dx: -b.dx, dy: b.dy },
+                            { x: b.x, y: b.y, dx: b.dx * 0.5, dy: -Math.abs(b.dy) }
+                        );
+                    }
+                }
+                collected = true;
+                break;
             }
-            break;
+        }
+        if (collected) {
+            game.powerups.splice(i, 1);
+        } else if (pu.y > CONFIG.CANVAS_HEIGHT) {
+            game.powerups.splice(i, 1);
         }
     }
-    
-    // 底部检测
-    if (game.ball.y + CONFIG.BALL_RADIUS > CONFIG.CANVAS_HEIGHT) {
-        game.lives--;
-        if (game.lives <= 0) {
-            game.status = 'gameover';
-        } else {
-            resetBall();
-        }
-    }
-    
-    // 胜利检测
+
     if (game.bricks.every(b => !b.alive)) {
         game.status = 'win';
     }
-    
+
     broadcastGameState();
-    setTimeout(gameLoop, 16); // ~60fps
+    setTimeout(gameLoop, 16);
 }
 
-// 广播游戏状态
 function broadcastGameState() {
     const state = {
         type: 'gameState',
-        ball: game.ball,
+        balls: game.balls,
+        powerups: game.powerups,
         bricks: game.bricks,
         players: game.players.map(p => ({
             id: p.id,
             x: p.x,
             y: p.y,
             color: p.color,
-            score: p.score
+            score: p.score,
+            paddleWidth: p.paddleWidth
         })),
         lives: game.lives,
         status: game.status
@@ -400,7 +467,6 @@ function broadcastGameState() {
     });
 }
 
-// 启动游戏循环
 gameLoop();
 
 server.listen(PORT, () => {
