@@ -4,3 +4,9 @@ Thumbs.db
 *.log
 .env
 .env.*
+_dsh_tmp/
+.dsh-tmp/
+dsh-tmp/
+assets/_gen_assets_tmp/
+__pycache__/
+*.pyc

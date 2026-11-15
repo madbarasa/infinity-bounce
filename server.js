@@ -1,401 +1,240 @@
-const WebSocket = require('ws');
+'use strict';
+
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const WebSocket = require('ws');
 
-const PORT = process.env.PORT || 8082;
+const core = require('./game-core');
+const CONFIG = core.CONFIG;
 
-// 创建 HTTP 服务器（用于托管静态文件）
+function resolvePort(raw) {
+    if (raw === undefined || raw === null || raw === '') return CONFIG.DEFAULT_PORT;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 1 || n > 65535) {
+        throw new Error(`PORT 必须是 1-65535 的整数，收到: ${raw}`);
+    }
+    return n;
+}
+
+const PORT = resolvePort(process.env.PORT);
+
+const STATIC_FILES = new Map([
+    ['/', { file: 'index.html', type: 'text/html; charset=utf-8' }],
+    ['/index.html', { file: 'index.html', type: 'text/html; charset=utf-8' }],
+    ['/style.css', { file: 'style.css', type: 'text/css; charset=utf-8' }],
+    ['/game.js', { file: 'game.js', type: 'application/javascript; charset=utf-8' }],
+    ['/config.js', { file: null, type: 'application/javascript; charset=utf-8' }],
+    ['/bg.webp', { file: 'bg.webp', type: 'image/webp', cache: true, root: 'assets' }],
+    ['/favicon.png', { file: 'icons/play.png', type: 'image/png', cache: true, root: 'assets' }]
+]);
+
+const ICON_PREFIX = '/icons/';
+const ICON_NAMES = new Set([
+    'settings', 'back', 'help', 'close', 'sound', 'vibrate',
+    'credits', 'pause', 'play', 'restart', 'powered-by-dsh'
+]);
+const COMMON_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN' };
+
+function sendHeaders(res, status, type, extra) {
+    res.writeHead(status, Object.assign({}, COMMON_HEADERS, { 'Content-Type': type }, extra || {}));
+}
+
+function sendNotFound(res) {
+    sendHeaders(res, 404, 'text/plain; charset=utf-8');
+    res.end('Not found');
+}
+
+function serveFile(res, relPath, type, extra, root) {
+    const abs = path.join(__dirname, root || 'public', relPath);
+    fs.readFile(abs, (err, data) => {
+        if (err) { sendNotFound(res); return; }
+        sendHeaders(res, 200, type, extra);
+        res.end(data);
+    });
+}
+
+function sameOrigin(req) {
+    const origin = req.headers.origin;
+    if (!origin) return true;
+    let host;
+    try { host = new URL(origin).host; } catch (e) { return false; }
+    const expected = req.headers['x-forwarded-host'] || req.headers.host;
+    if (host === expected) return true;
+    const hostname = String(expected).split(':')[0];
+    return new URL(origin).hostname === hostname;
+}
+
 const server = http.createServer((req, res) => {
-    const fs = require('fs');
-    const path = require('path');
-    if (req.url === '/' || req.url === '/index.html') {
-        const filePath = path.join(__dirname, 'public', 'index.html');
-        fs.readFile(filePath, (err, data) => {
-            if (err) { res.writeHead(500); res.end('Error'); return; }
-            res.writeHead(200, { 'Content-Type': 'text/html' });
-            res.end(data);
-        });
-    } else if (req.url === '/style.css') {
-        const filePath = path.join(__dirname, 'public', 'style.css');
-        fs.readFile(filePath, (err, data) => {
-            if (err) { res.writeHead(500); res.end('Error'); return; }
-            res.writeHead(200, { 'Content-Type': 'text/css' });
-            res.end(data);
-        });
-    } else if (req.url === '/game.js') {
-        const filePath = path.join(__dirname, 'public', 'game.js');
-        fs.readFile(filePath, (err, data) => {
-            if (err) { res.writeHead(500); res.end('Error'); return; }
-            res.writeHead(200, { 'Content-Type': 'application/javascript' });
-            res.end(data);
-        });
-    } else if (req.url === '/config.js') {
-        res.writeHead(200, { 'Content-Type': 'application/javascript' });
-        res.end('const CONFIG = ' + JSON.stringify(CONFIG) + ';');
-    } else {
-        res.writeHead(404);
-        res.end('Not found');
-    }
-});
+    if (req.method !== 'GET' && req.method !== 'HEAD') { sendNotFound(res); return; }
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const pathname = url.pathname;
 
-const wss = new WebSocket.Server({ server });
-
-// 游戏配置
-const CONFIG = {
-    CANVAS_WIDTH: 800,
-    CANVAS_HEIGHT: 600,
-    PADDLE_WIDTH: 80,
-    PADDLE_HEIGHT: 12,
-    // 每 tick 位移；在 SERVER_TICK_MS=8 下为 3.5 => 约 437.5 px/s（与旧 16ms*7 手感一致）
-    PADDLE_SPEED: 3.5,
-    BALL_RADIUS: 8,
-    BALL_SPEED: 7,
-    BRICK_ROWS: 5,
-    BRICK_COLS: 10,
-    BRICK_WIDTH: 70,
-    BRICK_HEIGHT: 20,
-    BRICK_PADDING: 5,
-    BRICK_OFFSET_TOP: 60,
-    INITIAL_LIVES: 10,
-    POINTS_PER_BRICK: 10,
-    MAX_PLAYERS: 4,
-    PLAYER_COLORS: ['#00f5d4', '#9b5de5', '#f15bb5', '#fee440'],
-    // --- 道具系统配置 ---
-    POWERUP_SIZE: 20,
-    POWERUP_SPEED: 2.5,
-    POWERUP_PROBABILITY: 0.2,
-    POWERUP_DURATION: 10000, // 10秒
-    BONUS_POINTS: 50,
-    LIFE_REWARD_THRESHOLD: 100,
-    SERVER_TICK_MS: 8
-};
-
-CONFIG.BRICK_OFFSET_LEFT = (CONFIG.CANVAS_WIDTH - (CONFIG.BRICK_COLS * CONFIG.BRICK_WIDTH + (CONFIG.BRICK_COLS - 1) * CONFIG.BRICK_PADDING)) / 2;
-
-// 游戏房间状态
-let game = {
-    status: 'waiting',
-    balls: [],
-    bricks: [],
-    players: [],
-    powerups: [],
-    lives: CONFIG.INITIAL_LIVES,
-    lastPaddleHitPlayerId: null,
-    destroyedBrickIndices: [] // 用于存储本帧被销毁的砖块索引
-};
-
-function initBricks() {
-    game.bricks = [];
-    const colors = ['#ef5350', '#ab47bc', '#42a5f5', '#26a69a', '#66bb6a'];
-    for (let row = 0; row < CONFIG.BRICK_ROWS; row++) {
-        for (let col = 0; col < CONFIG.BRICK_COLS; col++) {
-            const x = col * (CONFIG.BRICK_WIDTH + CONFIG.BRICK_PADDING) + CONFIG.BRICK_OFFSET_LEFT;
-            const y = row * (CONFIG.BRICK_HEIGHT + CONFIG.BRICK_PADDING) + CONFIG.BRICK_OFFSET_TOP;
-            game.bricks.push({
-                x, y,
-                width: CONFIG.BRICK_WIDTH,
-                height: CONFIG.BRICK_HEIGHT,
-                color: colors[row % colors.length],
-                alive: true
-            });
-        }
-    }
-}
-
-initBricks();
-
-wss.on('connection', (ws) => {
-    ws.on('message', (message) => {
-        try {
-            const data = JSON.parse(message);
-            if (data.type === 'join') {
-                if (game.players.some(p => p.ws === ws)) return;
-                if (game.players.length >= CONFIG.MAX_PLAYERS) {
-                    ws.send(JSON.stringify({ type: 'error', message: '房间已满' }));
-                    return;
-                }
-                const playerColor = CONFIG.PLAYER_COLORS[game.players.length % CONFIG.PLAYER_COLORS.length];
-                const player = {
-                    id: data.playerId,
-                    color: playerColor,
-                    x: 0,
-                    targetX: 0,
-                    y: CONFIG.CANVAS_HEIGHT - CONFIG.PADDLE_HEIGHT - 10,
-                    left: false,
-                    right: false,
-                    score: 0,
-                    lastLifeScore: 0,
-                    paddleWidth: CONFIG.PADDLE_WIDTH,
-                    widerTimer: null,
-                    ws
-                };
-                game.players.push(player);
-                repositionAllPaddles();
-                broadcastFullState(ws); // 新玩家加入时发送完整状态
-                broadcastGameState();
-            } else if (data.type === 'input') {
-                const player = game.players.find(p => p.id === data.playerId);
-                if (player) {
-                    player.left = data.left;
-                    player.right = data.right;
-                    if (data.mouseX !== null && data.mouseX !== undefined) {
-                        player.targetX = data.mouseX - playerPaddleWidth(player) / 2;
-                    }
-                }
-            } else if (data.type === 'ping') {
-                ws.send(
-                    JSON.stringify({
-                        type: 'pong',
-                        clientTs: data.clientTs,
-                        serverTs: Date.now()
-                    })
-                );
-            } else if (data.type === 'command') {
-                if (data.command === 'start' && game.status === 'waiting' && game.players.length >= 1) {
-                    game.status = 'playing';
-                    resetBall();
-                } else if (data.command === 'pause') {
-                    if (game.status === 'playing') game.status = 'paused';
-                    else if (game.status === 'paused') game.status = 'playing';
-                } else if (data.command === 'restart') {
-                    game.lives = CONFIG.INITIAL_LIVES;
-                    initBricks();
-                    game.players.forEach(p => {
-                        p.score = 0;
-                        p.lastLifeScore = 0;
-                        p.paddleWidth = CONFIG.PADDLE_WIDTH;
-                        if (p.widerTimer) clearTimeout(p.widerTimer);
-                    });
-                    game.status = 'waiting';
-                    game.lastPaddleHitPlayerId = null;
-                    game.powerups = [];
-                    game.balls = [];
-                    resetBall();
-                }
-                broadcastGameState();
-            }
-        } catch (e) { console.error(e); }
-    });
-
-    ws.on('close', () => {
-        const idx = game.players.findIndex(p => p.ws === ws);
-        if (idx !== -1) {
-            const p = game.players[idx];
-            if (p.widerTimer) clearTimeout(p.widerTimer);
-            game.players.splice(idx, 1);
-            repositionAllPaddles();
-            broadcastGameState();
-        }
-    });
-});
-
-function repositionAllPaddles() {
-    if (game.players.length === 0) return;
-    const positions = getPaddlePositions(game.players.length);
-    game.players.forEach((p, i) => { p.x = positions[i]; });
-}
-
-function getPaddlePositions(count) {
-    const positions = [];
-    if (count === 1) {
-        positions.push((CONFIG.CANVAS_WIDTH - CONFIG.PADDLE_WIDTH) / 2);
-    } else {
-        const spacing = CONFIG.CANVAS_WIDTH / count;
-        for (let i = 0; i < count; i++) {
-            positions.push(spacing * i + (spacing - CONFIG.PADDLE_WIDTH) / 2);
-        }
-    }
-    return positions;
-}
-
-function playerPaddleWidth(p) { return p.paddleWidth || CONFIG.PADDLE_WIDTH; }
-
-function resetBall() {
-    if (game.players.length === 0) return;
-    const p = game.players[Math.floor(Math.random() * game.players.length)];
-    game.lastPaddleHitPlayerId = p.id;
-    const angle = (Math.random() - 0.5) * Math.PI / 2;
-    game.balls = [{
-        x: p.x + playerPaddleWidth(p) / 2,
-        y: p.y - CONFIG.BALL_RADIUS,
-        dx: Math.sin(angle) * CONFIG.BALL_SPEED,
-        dy: -CONFIG.BALL_SPEED
-    }];
-}
-
-function rectIntersect(r1, r2) {
-    return !(r2.left > r1.right || r2.right < r1.left || r2.top > r1.bottom || r2.bottom < r1.top);
-}
-
-function gameLoop() {
-    if (game.status !== 'playing') {
+    if (pathname === '/health') {
+        const body = JSON.stringify({ status: 'ok', version: CONFIG.VERSION, players: game.players.length, uptime: process.uptime() });
+        sendHeaders(res, 200, 'application/json; charset=utf-8', { 'Cache-Control': 'no-store' });
+        res.end(req.method === 'HEAD' ? undefined : body);
         return;
     }
-    if (game.players.length === 0) {
-        game.status = 'waiting';
+
+    if (pathname.startsWith(ICON_PREFIX)) {
+        const file = pathname.slice(ICON_PREFIX.length);
+        const name = file.endsWith('.png') ? file.slice(0, -4) : file;
+        if (!ICON_NAMES.has(name) || !/^[a-z][a-z0-9-]*$/.test(name) || name.includes('..')) { sendNotFound(res); return; }
+        const abs = path.join(__dirname, 'assets', 'icons', name + '.png');
+        fs.readFile(abs, (err, data) => {
+            if (err) { sendNotFound(res); return; }
+            sendHeaders(res, 200, 'image/png', { 'Cache-Control': 'public, max-age=86400' });
+            res.end(req.method === 'HEAD' ? undefined : data);
+        });
+        return;
+    }
+
+    const entry = STATIC_FILES.get(pathname);
+    if (!entry) { sendNotFound(res); return; }
+    const extra = entry.cache ? { 'Cache-Control': 'public, max-age=86400' } : { 'Cache-Control': 'no-cache' };
+    if (entry.file === null) {
+        const body = 'const CONFIG = ' + JSON.stringify(CONFIG) + ';';
+        sendHeaders(res, 200, entry.type, extra);
+        res.end(req.method === 'HEAD' ? undefined : body);
+        return;
+    }
+    serveFile(res, entry.file, entry.type, extra, entry.root);
+});
+
+server.on('error', (err) => {
+    console.error('[HTTP]', err.message);
+    if (err.code === 'EADDRINUSE' || err.code === 'EACCES') process.exitCode = 1;
+});
+server.on('clientError', (err, socket) => { socket.end('HTTP/1.1 400 Bad Request\r\n\r\n'); });
+
+const wss = new WebSocket.Server({
+    server,
+    maxPayload: CONFIG.MAX_PAYLOAD,
+    verifyClient: (info, done) => { done(sameOrigin(info.req)); }
+});
+
+wss.on('error', (err) => { console.error('[WSS]', err.message); });
+
+const game = core.createGame();
+
+function wsPlayer(ws) {
+    if (!ws.playerId) return null;
+    return game.players.find(p => p.id === ws.playerId) || null;
+}
+
+function safeSend(ws, payload) {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (ws.bufferedAmount > 1024 * 1024) { ws.terminate(); return; }
+    ws.send(payload);
+}
+
+function broadcastGameState() {
+    if (!game.dirty) return;
+    const message = JSON.stringify(core.serializeState(game));
+    for (const c of wss.clients) safeSend(c, message);
+    game.dirty = false;
+}
+
+function broadcastFullState() {
+    for (const c of wss.clients) {
+        if (c.readyState !== WebSocket.OPEN || !c.playerId) continue;
+        safeSend(c, JSON.stringify(core.serializeFull(game, c.playerId)));
+    }
+    game.dirty = false;
+}
+
+function sendError(ws, message) {
+    safeSend(ws, JSON.stringify({ type: 'error', message }));
+}
+
+function handleMessage(ws, raw) {
+    if (!ws.messageBudget || Date.now() > ws.budgetResetAt) {
+        ws.budgetResetAt = Date.now() + 1000;
+        ws.messageBudget = CONFIG.MAX_MESSAGES_PER_SECOND;
+    }
+    ws.messageBudget--;
+    if (ws.messageBudget < 0) { ws.terminate(); return; }
+
+    let data;
+    try { data = JSON.parse(raw); } catch (e) { sendError(ws, '消息格式错误'); return; }
+    if (!data || typeof data !== 'object' || Array.isArray(data) || typeof data.type !== 'string') {
+        sendError(ws, '消息格式错误');
+        return;
+    }
+
+    if (data.type === 'join') {
+        if (ws.playerId) { safeSend(ws, JSON.stringify(core.serializeFull(game, ws.playerId))); return; }
+        if (game.players.length >= CONFIG.MAX_PLAYERS) { sendError(ws, '房间已满'); return; }
+        const player = core.addPlayer(game, ws);
+        if (!player) { sendError(ws, '无法加入'); return; }
+        safeSend(ws, JSON.stringify(core.serializeFull(game, player.id)));
         broadcastGameState();
         return;
     }
 
-    game.players.forEach(p => {
-        if (p.left || p.right) {
-            p.targetX = null;
-            if (p.left) p.x -= CONFIG.PADDLE_SPEED;
-            if (p.right) p.x += CONFIG.PADDLE_SPEED;
-        } else if (p.targetX !== undefined && p.targetX !== null) {
-            // 鼠标/触摸输入直接贴合目标位置，避免按速度追赶造成明显拖拽延迟
-            p.x = p.targetX;
-        }
-        p.x = Math.max(0, Math.min(CONFIG.CANVAS_WIDTH - playerPaddleWidth(p), p.x));
+    const player = wsPlayer(ws);
+    if (!player) { sendError(ws, '请先加入房间'); return; }
+
+    if (data.type === 'input') {
+        const input = core.normalizeInput(data);
+        if (!input) { sendError(ws, '输入参数错误'); return; }
+        core.applyInput(game, player, input);
+        return;
+    }
+    if (data.type === 'ping') {
+        const clientTs = typeof data.clientTs === 'number' && Number.isFinite(data.clientTs) ? data.clientTs : null;
+        safeSend(ws, JSON.stringify({ type: 'pong', clientTs, serverTs: Date.now() }));
+        return;
+    }
+    if (data.type === 'command') {
+        const command = core.normalizeCommand(data);
+        if (!command) { sendError(ws, '指令无效'); return; }
+        if (command === 'start') core.startGame(game);
+        else if (command === 'pause') core.togglePause(game);
+        else if (command === 'restart') { core.restartGame(game); core.startGame(game); broadcastFullState(); return; }
+        broadcastGameState();
+        return;
+    }
+    sendError(ws, '未知消息类型');
+}
+
+wss.on('connection', (ws) => {
+    ws.playerId = null;
+    ws.isAlive = true;
+    ws.messageBudget = CONFIG.MAX_MESSAGES_PER_SECOND;
+    ws.budgetResetAt = Date.now() + 1000;
+    ws.on('pong', () => { ws.isAlive = true; });
+    ws.on('error', () => { /* 单连接错误隔离，防止未处理 error 事件终止进程 */ });
+    ws.on('message', (message) => { handleMessage(ws, message.toString()); });
+    ws.on('close', () => {
+        if (core.removePlayer(game, ws)) broadcastGameState();
     });
+});
 
-    for (let i = game.balls.length - 1; i >= 0; i--) {
-        const ball = game.balls[i];
-        ball.x += ball.dx;
-        ball.y += ball.dy;
-
-        if (ball.x - CONFIG.BALL_RADIUS < 0) { ball.x = CONFIG.BALL_RADIUS; ball.dx = Math.abs(ball.dx); }
-        else if (ball.x + CONFIG.BALL_RADIUS > CONFIG.CANVAS_WIDTH) { ball.x = CONFIG.CANVAS_WIDTH - CONFIG.BALL_RADIUS; ball.dx = -Math.abs(ball.dx); }
-        if (ball.y - CONFIG.BALL_RADIUS < 0) { ball.y = CONFIG.BALL_RADIUS; ball.dy = Math.abs(ball.dy); }
-
-        let hitP = false;
-        for (const p of game.players) {
-            const pw = playerPaddleWidth(p);
-            const pr = { left: p.x, right: p.x + pw, top: p.y, bottom: p.y + CONFIG.PADDLE_HEIGHT };
-            const br = { left: ball.x - CONFIG.BALL_RADIUS, right: ball.x + CONFIG.BALL_RADIUS, top: ball.y - CONFIG.BALL_RADIUS, bottom: ball.y + CONFIG.BALL_RADIUS };
-            if (rectIntersect(br, pr) && ball.dy > 0) {
-                game.lastPaddleHitPlayerId = p.id;
-                const hitPos = (ball.x - p.x) / pw;
-                const angle = Math.max(-Math.PI/3, Math.min(Math.PI/3, hitPos * Math.PI - Math.PI/2));
-                const speed = Math.sqrt(ball.dx * ball.dx + ball.dy * ball.dy);
-                ball.dx = Math.sin(angle) * speed;
-                ball.dy = -Math.cos(angle) * speed;
-                ball.y = p.y - CONFIG.BALL_RADIUS;
-                hitP = true;
-                break;
-            }
-        }
-
-        if (!hitP) {
-            for (let idx = 0; idx < game.bricks.length; idx++) {
-                const b = game.bricks[idx];
-                if (!b.alive) continue;
-                const br = { left: b.x, right: b.x + b.width, top: b.y, bottom: b.y + b.height };
-                const ballR = { left: ball.x - CONFIG.BALL_RADIUS, right: ball.x + CONFIG.BALL_RADIUS, top: ball.y - CONFIG.BALL_RADIUS, bottom: ball.y + CONFIG.BALL_RADIUS };
-                if (rectIntersect(ballR, br)) {
-                    b.alive = false;
-                    game.destroyedBrickIndices.push(idx); // 记录被销毁的索引
-                    const s = game.players.find(p => p.id === game.lastPaddleHitPlayerId);
-                    if (s) {
-                        s.score += CONFIG.POINTS_PER_BRICK;
-                        if (s.score - s.lastLifeScore >= CONFIG.LIFE_REWARD_THRESHOLD) {
-                            game.lives++;
-                            s.lastLifeScore += CONFIG.LIFE_REWARD_THRESHOLD;
-                        }
-                    }
-                    if (Math.random() < CONFIG.POWERUP_PROBABILITY) {
-                        const types = ['W', 'P', 'M'];
-                        game.powerups.push({
-                            x: b.x + b.width/2 - CONFIG.POWERUP_SIZE/2,
-                            y: b.y + b.height/2,
-                            type: types[Math.floor(Math.random() * types.length)],
-                            width: CONFIG.POWERUP_SIZE, height: CONFIG.POWERUP_SIZE
-                        });
-                    }
-                    const overlapLeft = ball.x + CONFIG.BALL_RADIUS - br.left;
-                    const overlapRight = br.right - (ball.x - CONFIG.BALL_RADIUS);
-                    const overlapTop = ball.y + CONFIG.BALL_RADIUS - br.top;
-                    const overlapBottom = br.bottom - (ball.y - CONFIG.BALL_RADIUS);
-                    const minO = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
-                    if (minO === overlapLeft) { ball.x = br.left - CONFIG.BALL_RADIUS; ball.dx = -Math.abs(ball.dx); }
-                    else if (minO === overlapRight) { ball.x = br.right + CONFIG.BALL_RADIUS; ball.dx = Math.abs(ball.dx); }
-                    else if (minO === overlapTop) { ball.y = br.top - CONFIG.BALL_RADIUS; ball.dy = -Math.abs(ball.dy); }
-                    else if (minO === overlapBottom) { ball.y = br.bottom + CONFIG.BALL_RADIUS; ball.dy = Math.abs(ball.dy); }
-                    break;
-                }
-            }
-        }
-
-        if (ball.y + CONFIG.BALL_RADIUS > CONFIG.CANVAS_HEIGHT) {
-            game.balls.splice(i, 1);
-            if (game.balls.length === 0) {
-                game.lives--;
-                if (game.lives <= 0) game.status = 'gameover';
-                else resetBall();
-            }
-        }
+const heartbeat = setInterval(() => {
+    for (const c of wss.clients) {
+        if (!c.isAlive) { c.terminate(); continue; }
+        c.isAlive = false;
+        if (c.readyState === WebSocket.OPEN) c.ping();
     }
+}, CONFIG.HEARTBEAT_INTERVAL_MS);
+heartbeat.unref();
 
-    for (let i = game.powerups.length - 1; i >= 0; i--) {
-        const pu = game.powerups[i];
-        pu.y += CONFIG.POWERUP_SPEED;
-        for (const p of game.players) {
-            const pw = playerPaddleWidth(p);
-            const pr = { left: p.x, right: p.x + pw, top: p.y, bottom: p.y + CONFIG.PADDLE_HEIGHT };
-            const pur = { left: pu.x, right: pu.x + pu.width, top: pu.y, bottom: pu.y + pu.height };
-            if (rectIntersect(pur, pr)) {
-                if (pu.type === 'W') {
-                    p.paddleWidth = CONFIG.PADDLE_WIDTH * 1.5;
-                    if (p.widerTimer) clearTimeout(p.widerTimer);
-                    p.widerTimer = setTimeout(() => { p.paddleWidth = CONFIG.PADDLE_WIDTH; }, CONFIG.POWERUP_DURATION);
-                } else if (pu.type === 'P') {
-                    p.score += CONFIG.BONUS_POINTS;
-                    if (p.score - p.lastLifeScore >= CONFIG.LIFE_REWARD_THRESHOLD) { game.lives++; p.lastLifeScore += CONFIG.LIFE_REWARD_THRESHOLD; }
-                } else if (pu.type === 'M') {
-                    if (game.balls.length > 0) {
-                        const b = game.balls[0];
-                        game.balls.push({ x: b.x, y: b.y, dx: -b.dx, dy: b.dy }, { x: b.x, y: b.y, dx: b.dx * 0.5, dy: -Math.abs(b.dy) });
-                    }
-                }
-                game.powerups.splice(i, 1);
-                break;
-            }
-        }
-        if (pu && pu.y > CONFIG.CANVAS_HEIGHT) game.powerups.splice(i, 1);
-    }
-    if (game.bricks.every(b => !b.alive)) game.status = 'win';
-    broadcastGameState();
-}
+const simTimer = setInterval(() => { core.stepGame(game); }, CONFIG.SIMULATION_TICK_MS);
+simTimer.unref();
 
-function broadcastGameState() {
-    const state = {
-        type: 'gameState',
-        balls: game.balls,
-        powerups: game.powerups,
-        players: game.players.map(p => ({
-            id: p.id, x: p.x, y: p.y, color: p.color, score: p.score, paddleWidth: p.paddleWidth
-        })),
-        lives: game.lives,
-        status: game.status,
-        timestamp: Date.now()
-    };
-    
-    // 如果有砖块被销毁，发送增量更新
-    if (game.destroyedBrickIndices.length > 0) {
-        state.destroyedBricks = [...game.destroyedBrickIndices];
-        game.destroyedBrickIndices = []; // 清空缓存
-    }
+const broadcastTimer = setInterval(broadcastGameState, CONFIG.BROADCAST_INTERVAL_MS);
+broadcastTimer.unref();
 
-    const message = JSON.stringify(state);
-    wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(message); });
-}
+process.on('uncaughtException', (err) => {
+    console.error('[uncaughtException]', err);
+    if (err && err.code === 'EADDRINUSE') process.exit(1);
+});
+process.on('unhandledRejection', (err) => { console.error('[unhandledRejection]', err); });
 
-function broadcastFullState(ws) {
-    const state = {
-        type: 'fullState',
-        balls: game.balls,
-        bricks: game.bricks.map(b => b.alive), // 仅发送生存状态位
-        players: game.players.map(p => ({
-            id: p.id, x: p.x, y: p.y, color: p.color, score: p.score, paddleWidth: p.paddleWidth
-        })),
-        lives: game.lives,
-        status: game.status,
-        config: {
-            BRICK_ROWS: CONFIG.BRICK_ROWS,
-            BRICK_COLS: CONFIG.BRICK_COLS
-        }
-    };
-    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(state));
-}
+server.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT} (v${CONFIG.VERSION})`);
+});
 
-setInterval(gameLoop, CONFIG.SERVER_TICK_MS);
-server.listen(PORT, () => { console.log(`Server running on http://localhost:${PORT}`); });
+module.exports = { server, wss, game };

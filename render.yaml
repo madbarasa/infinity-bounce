@@ -2,6 +2,7 @@ services:
   - type: web
     name: infinity-bounce
     env: nodejs
-    buildCommand: npm install
+    buildCommand: npm ci
     startCommand: npm start
     plan: free
+    healthCheckPath: /health

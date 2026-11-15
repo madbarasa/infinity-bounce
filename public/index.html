@@ -2,46 +2,74 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#05070f">
     <title>多人打砖块</title>
+    <link rel="icon" type="image/png" href="/favicon.png">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="game-container">
-        <div class="header">
-            <h1>多人打砖块</h1>
-            <div class="stats">
-                <span class="stat">分数: <span id="score">0</span></span>
-                <span class="stat">生命: <span id="lives">10</span></span>
-                <span class="stat">最高分: <span id="high-score">0</span></span>
+    <div class="app">
+        <header class="topbar">
+            <h1 class="brand">多人打砖块</h1>
+            <div class="top-actions">
+                <div class="stats">
+                    <span class="stat">分数 <b id="score">0</b></span>
+                    <span class="stat">生命 <b id="lives">10</b></span>
+                    <span class="stat">最高分 <b id="high-score">0</b></span>
+                </div>
+                <button id="help-btn" class="icon-btn" type="button" title="帮助" aria-label="帮助">
+                    <img src="/icons/help.png" alt="">
+                </button>
+                <button id="settings-btn" class="icon-btn" type="button" title="设置" aria-label="设置">
+                    <img src="/icons/settings.png" alt="">
+                </button>
             </div>
-        </div>
+        </header>
 
-        <div class="canvas-wrapper">
-            <canvas id="gameCanvas" width="800" height="600"></canvas>
-            
-            <div id="game-menu" class="menu-overlay">
-                <div class="menu-content">
-                    <h2 id="menu-title">多人打砖块</h2>
-                    <p id="menu-message">正在连接服务器...</p>
-                    <button id="start-btn" class="btn-primary">开始游戏</button>
-                    <div class="controls-info">
-                        <p>🎮 操作说明</p>
-                        <p>← → 或 A D 键移动你的挡板</p>
-                        <p>鼠标移动也可控制</p>
-                        <p>空格键暂停</p>
-                        <p>邀请朋友打开同一页面加入</p>
+        <main class="stage">
+            <div class="canvas-wrapper">
+                <canvas id="gameCanvas" width="800" height="600"></canvas>
+
+                <div id="game-menu" class="menu-overlay">
+                    <div class="menu-content">
+                        <h2 id="menu-title">多人打砖块</h2>
+                        <p id="menu-message">正在连接服务器…</p>
+                        <button id="start-btn" class="btn-primary" type="button">开始游戏</button>
                     </div>
                 </div>
-            </div>
-        </div>
 
-        <div class="footer">
+                <section id="panel" class="panel hidden" aria-hidden="true">
+                    <div class="panel-bar">
+                        <button id="back-btn" class="icon-btn" type="button" title="返回" aria-label="返回">
+                            <img src="/icons/back.png" alt="">
+                        </button>
+                        <h2 id="panel-title">设置</h2>
+                        <button id="close-btn" class="icon-btn" type="button" title="关闭" aria-label="关闭">
+                            <img src="/icons/close.png" alt="">
+                        </button>
+                    </div>
+                    <div id="panel-body" class="panel-body"></div>
+                </section>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <span id="version" class="version">v2.0.0</span>
             <div id="players" class="players-list"></div>
-            <button id="pause-btn" class="btn-secondary">暂停</button>
-            <button id="restart-btn" class="btn-secondary">重新开始</button>
-        </div>
+            <div class="footer-actions">
+                <button id="pause-btn" class="icon-btn" type="button" title="暂停" aria-label="暂停">
+                    <img src="/icons/pause.png" alt="">
+                </button>
+                <button id="restart-btn" class="icon-btn" type="button" title="重新开始" aria-label="重新开始">
+                    <img src="/icons/restart.png" alt="">
+                </button>
+            </div>
+            <span class="engine">基于Urhox引擎开发</span>
+        </footer>
     </div>
+
+    <div id="toast" class="toast hidden" role="status"></div>
 
     <script src="config.js"></script>
     <script src="game.js"></script>
